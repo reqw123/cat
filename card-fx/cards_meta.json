@@ -1,0 +1,172 @@
+{
+  "3F_3F3F_3F3F%3F2_phantom_card.html": {
+    "date": "2026-09-19",
+    "no": "011",
+    "stats": {
+      "ATK": 73,
+      "DEF": 90,
+      "LUK": 62,
+      "SPD": 97
+    }
+  },
+  "feilong_phantom_card.html": {
+    "date": "2026-09-18",
+    "no": "006",
+    "stats": {
+      "ATK": 84,
+      "DEF": 70,
+      "LUK": 96,
+      "SPD": 56
+    }
+  },
+  "gojo_hollow_purple_card.html": {
+    "date": "2026-09-08",
+    "no": "003",
+    "stats": {
+      "ATK": 79,
+      "DEF": 82,
+      "LUK": 75,
+      "SPD": 76
+    }
+  },
+  "gojo_phantom_card.html": {
+    "date": "2026-09-08",
+    "no": "002",
+    "stats": {
+      "ATK": 91,
+      "DEF": 63,
+      "LUK": 74,
+      "SPD": 94
+    }
+  },
+  "jifeng_phantom_card.html": {
+    "date": "2026-09-18",
+    "no": "008",
+    "stats": {
+      "ATK": 73,
+      "DEF": 72,
+      "LUK": 72,
+      "SPD": 67
+    }
+  },
+  "jimmy_phantom_card.html": {
+    "date": "2026-09-08",
+    "no": "001",
+    "stats": {
+      "ATK": 75,
+      "DEF": 67,
+      "LUK": 96,
+      "SPD": 84
+    }
+  },
+  "wangcai_phantom_card.html": {
+    "date": "2026-09-18",
+    "no": "004",
+    "stats": {
+      "ATK": 85,
+      "DEF": 70,
+      "LUK": 60,
+      "SPD": 90
+    }
+  },
+  "wuming_phantom_card.html": {
+    "date": "2026-09-18",
+    "no": "009",
+    "stats": {
+      "ATK": 61,
+      "DEF": 86,
+      "LUK": 81,
+      "SPD": 96
+    }
+  },
+  "yinglang_phantom_card.html": {
+    "date": "2026-09-18",
+    "no": "005",
+    "stats": {
+      "ATK": 69,
+      "DEF": 89,
+      "LUK": 86,
+      "SPD": 56
+    }
+  },
+  "zhuaige_phantom_card.html": {
+    "date": "2026-09-18",
+    "no": "007",
+    "stats": {
+      "ATK": 77,
+      "DEF": 75,
+      "LUK": 70,
+      "SPD": 88
+    }
+  },
+  "林間木棧_夜_phantom_card.html": {
+    "date": "2026-09-20",
+    "no": "013",
+    "stats": {
+      "ATK": 56,
+      "DEF": 66,
+      "LUK": 87,
+      "SPD": 61
+    }
+  },
+  "林間木棧_晝_phantom_card.html": {
+    "date": "2026-09-20",
+    "no": "012",
+    "stats": {
+      "ATK": 83,
+      "DEF": 97,
+      "LUK": 57,
+      "SPD": 80
+    }
+  },
+  "林間露營_夜_phantom_card.html": {
+    "date": "2026-09-20",
+    "no": "015",
+    "stats": {
+      "ATK": 81,
+      "DEF": 75,
+      "LUK": 78,
+      "SPD": 77
+    }
+  },
+  "林間露營_晝_phantom_card.html": {
+    "date": "2026-09-20",
+    "no": "014",
+    "stats": {
+      "ATK": 90,
+      "DEF": 77,
+      "LUK": 57,
+      "SPD": 75
+    }
+  },
+  "森林屋_晝_phantom_card.html": {
+    "date": "2026-09-20",
+    "no": "016",
+    "stats": {
+      "ATK": 89,
+      "DEF": 84,
+      "LUK": 67,
+      "SPD": 82
+    }
+  },
+  "營區陽光男孩-幻影卡.html": {
+    "date": "2026-09-10",
+    "no": "010",
+    "stats": {
+      "ATK": 88,
+      "DEF": 62,
+      "LUK": 55,
+      "SPD": 57
+    }
+  },
+  "露天影院_夜_phantom_card.html": {
+    "date": "2026-09-20",
+    "no": "017",
+    "stats": {
+      "ATK": 57,
+      "DEF": 64,
+      "LUK": 78,
+      "SPD": 62
+    }
+  }
+}

@@ -1,0 +1,100 @@
+/* ====================================================================
+   card-fx：稀有度切換 / 技能演出 / 卡背資訊 / 音效（樣式部分）
+   由 card-fx/apply_fx.py 連同 fx.js、#card-meta 一起注入每張卡片；不要直接改卡片裡的副本，
+   改這份再重新執行 apply_fx.py。
+   ==================================================================== */
+
+/* ---------- 共用色（fx.js 依 #card-meta.colors 寫入 :root） ---------- */
+:root{ --fx-c1:#8be9fd; --fx-c2:#bd93f9; --fx-c3:#ffffff; --fx-aura:0; }
+
+/* 蓄力縮放／爆發震動：用獨立的 scale / translate 屬性，不會蓋掉卡片自己的 transform（3D 傾斜、CARD_SCALE） */
+.card{ scale:var(--fx-scale,1); }
+.stage{ translate:var(--fx-shx,0px) var(--fx-shy,0px); }
+
+/* ---------- 特效層（每個面一份，蓋在卡面內、被圓角裁切） ---------- */
+.fx-layer{ position:absolute; inset:0; z-index:30; pointer-events:none; overflow:hidden; border-radius:inherit; }
+.fx-canvas{ position:absolute; inset:0; width:100%; height:100%; }
+.fx-flash{ position:absolute; inset:0; opacity:0; mix-blend-mode:screen;
+  background:radial-gradient(circle at 50% 46%, #fff 0%, var(--fx-c3) 18%, var(--fx-c2) 40%, transparent 72%); }
+.fx-ring{ position:absolute; left:50%; top:46%; width:22px; height:22px; border-radius:50%; opacity:0;
+  border:3px solid var(--fx-c3); box-shadow:0 0 18px var(--fx-c2), inset 0 0 12px var(--fx-c2);
+  transform:translate(-50%,-50%) scale(0); }
+.fx-shine{ position:absolute; inset:-25%; opacity:0; mix-blend-mode:screen;
+  background:linear-gradient(105deg, transparent 38%, rgba(255,255,255,.85) 50%, transparent 62%); transform:translateX(-130%); }
+.fx-toast{ position:absolute; left:50%; top:9%; transform:translateX(-50%); opacity:0; white-space:nowrap;
+  padding:5px 13px 4px; border-radius:999px; font:700 11px/1.2 'Cinzel','Noto Sans TC',sans-serif; letter-spacing:.16em; color:#fff;
+  background:rgba(8,10,16,.82); border:1px solid var(--fx-c2); box-shadow:0 0 14px var(--fx-c2); text-shadow:0 1px 2px #000; }
+
+/* ---------- 星光（SR 少 → LR 滿，依稀有度顯示前 N 顆） ---------- */
+.fx-stars{ position:absolute; inset:0; }
+.fx-stars i{ position:absolute; font-style:normal; line-height:1; color:#fff; opacity:.65;
+  text-shadow:0 0 6px var(--fx-c3), 0 0 13px var(--fx-c2);
+  animation:fxTwinkle var(--d,3s) ease-in-out var(--dl,0s) infinite; }
+@keyframes fxTwinkle{ 0%,100%{ opacity:.12; transform:scale(.55) rotate(0deg); } 50%{ opacity:1; transform:scale(1.15) rotate(18deg); } }
+body[data-rarity="SR"]  .fx-stars i:nth-child(n+11),
+body[data-rarity="SSR"] .fx-stars i:nth-child(n+25),
+body[data-rarity="UR"]  .fx-stars i:nth-child(n+49){ display:none; }
+
+/* ---------- 稜鏡層（UR / LR 才有） ---------- */
+.fx-prism{ position:absolute; inset:0; opacity:var(--rar-prism,0); mix-blend-mode:color-dodge;
+  background:linear-gradient(115deg, rgba(255,0,140,.55), rgba(255,214,0,.55) 25%, rgba(0,255,170,.55) 50%, rgba(0,160,255,.55) 75%, rgba(160,80,255,.55));
+  animation:fxPrism 9s linear infinite; }
+/* 用 hue-rotate 循環變色（不用移動放大的漸層——平鋪的接縫會在卡面上出現硬邊） */
+@keyframes fxPrism{ from{ filter:hue-rotate(0deg); } to{ filter:hue-rotate(360deg); } }
+
+/* ---------- 稀有度：每一階一組變數 ---------- */
+body{ --rar-sat:1; --rar-br:1; --rar-prism:0; --rar-glow:rgba(212,175,55,.16); --rar-glow-r:22px;
+  --rar-frame:linear-gradient(115deg,#241a05 0%,#8a6a1c 9%,#d8b352 19%,#fff6d8 27%,#b98d2e 35%,#5c4610 47%,#9a7a24 58%,#f4e2a0 70%,#7c5f18 84%,#241a05 100%); }
+body[data-rarity="SR"]{ --rar-sat:.72; --rar-br:.82; --rar-prism:0; --rar-glow:rgba(190,208,230,.30); --rar-glow-r:18px;
+  --rar-frame:linear-gradient(115deg,#1a2029 0%,#566171 9%,#a9b6c7 19%,#f1f6fb 27%,#8d99aa 35%,#434d5b 47%,#7a8798 58%,#dde7f1 70%,#58626f 84%,#1a2029 100%); }
+body[data-rarity="SSR"]{ --rar-sat:1; --rar-br:1; --rar-prism:0; --rar-glow:rgba(212,175,55,.34); --rar-glow-r:26px; }
+body[data-rarity="UR"]{ --rar-sat:1.5; --rar-br:1.22; --rar-prism:.30; --rar-glow:rgba(190,120,255,.52); --rar-glow-r:34px;
+  --rar-frame:linear-gradient(115deg,#2a0f3a 0%,#ff4fa3 11%,#ffd24f 22%,#5dffb1 34%,#4fb8ff 46%,#a26bff 58%,#ff4fa3 70%,#ffd24f 82%,#2a0f3a 100%); }
+body[data-rarity="LR"]{ --rar-sat:1.8; --rar-br:1.4; --rar-prism:.46; --rar-glow:rgba(255,190,225,.62); --rar-glow-r:42px;
+  --rar-frame:linear-gradient(115deg,#2b1a20 0%,#e8b4c8 9%,#ffffff 20%,#f6d27a 31%,#c69ad6 43%,#ffffff 55%,#9fd8ff 66%,#e8b4c8 77%,#f6d27a 88%,#2b1a20 100%); }
+
+/* 邊框金屬感：只換 background-image（不用簡寫、不加 !important 到 position），卡片原本的 sheen 流光動畫照常跑；
+   光暈同時疊上技能蓄力的 --fx-aura。 */
+body[data-rarity] .card__frame, body[data-rarity] .back__frame{ background-image:var(--rar-frame) !important; }
+body[data-rarity] .card__frame, body[data-rarity] .back__frame{
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.38), inset 0 0 16px rgba(0,0,0,.55),
+    0 0 var(--rar-glow-r,22px) var(--rar-glow,rgba(212,175,55,.16)),
+    0 0 calc(8px + 40px*var(--fx-aura,0)) calc(1px + 9px*var(--fx-aura,0)) color-mix(in srgb, var(--fx-c2) calc(var(--fx-aura,0)*90%), transparent) !important; }
+/* 全息材質強度 */
+body[data-rarity] .holo{ filter:saturate(var(--rar-sat,1)) brightness(var(--rar-br,1)); }
+
+/* 稀有度晶片：每一階自己的材質 */
+body[data-rarity="SR"] .chip--ssr{ color:#101820 !important; background:linear-gradient(120deg,#f6f9fc,#aab7c8 55%,#7d8b9d) !important;
+  border-color:rgba(255,255,255,.7) !important; box-shadow:0 0 14px rgba(190,208,230,.55), inset 0 1px 0 rgba(255,255,255,.7) !important; }
+body[data-rarity="UR"] .chip--ssr{ color:#fff !important; text-shadow:0 1px 2px rgba(0,0,0,.7);
+  background:linear-gradient(120deg,#ff4fa3,#ffb84f 30%,#5dffb1 55%,#4fb8ff 78%,#a26bff) !important;
+  border-color:rgba(255,255,255,.75) !important; box-shadow:0 0 18px rgba(190,120,255,.7), inset 0 1px 0 rgba(255,255,255,.6) !important; }
+body[data-rarity="LR"] .chip--ssr{ color:#3a1030 !important;
+  background:linear-gradient(120deg,#fff,#f6d27a 30%,#e8b4c8 55%,#9fd8ff 80%,#fff) !important;
+  border-color:rgba(255,255,255,.9) !important; box-shadow:0 0 22px rgba(255,190,225,.85), inset 0 1px 0 rgba(255,255,255,.9) !important; }
+
+/* ---------- 技能演出：爆發瞬間 ---------- */
+body.fx-burst .holo{ opacity:.85 !important; filter:saturate(1.7) brightness(1.3) !important; }
+body.fx-burst .ghost--warn, body.fx-burst .ghost--past, body.fx-burst .echo{ opacity:.92 !important; }
+.fx-clone{ pointer-events:none; }
+
+/* ---------- 卡背資訊 ---------- */
+.back__inner.has-fx-info .back__medallion{ width:42%; }
+.back__inner.has-fx-info .back__glyph{ font-size:calc(var(--card-w) * .19); }
+.back__inner.has-fx-info .back__emblem{ width:78%; }
+.back__info{ position:relative; width:82%; display:flex; flex-direction:column; gap:7px; margin-top:2px; padding:8px 10px 9px;
+  border-radius:9px; background:rgba(0,0,0,.34); border:1px solid rgba(255,255,255,.12); box-shadow:inset 0 0 14px rgba(0,0,0,.35); }
+.bi-head{ display:flex; justify-content:space-between; align-items:baseline; gap:6px;
+  font:700 9.5px/1 'Cinzel','Noto Sans TC',serif; letter-spacing:.12em; color:rgba(255,255,255,.6); text-shadow:0 1px 2px #000; }
+.bi-head b{ color:var(--fx-c3); font-weight:700; text-shadow:0 0 8px var(--fx-c2), 0 1px 2px #000; }
+.bi-stats{ display:grid; grid-template-columns:1fr 1fr; gap:6px 14px; }
+.bi-stat{ display:grid; grid-template-columns:24px 1fr 20px; align-items:center; gap:5px;
+  font:700 9.5px/1 'Cinzel','Noto Sans TC',serif; letter-spacing:.05em; color:rgba(255,255,255,.78); text-shadow:0 1px 2px #000; }
+.bi-stat em{ font-style:normal; color:var(--fx-c3); text-align:right; }
+.bi-bar{ height:5px; border-radius:3px; background:rgba(255,255,255,.13); overflow:hidden; box-shadow:inset 0 0 0 1px rgba(0,0,0,.35); }
+.bi-bar i{ display:block; height:100%; border-radius:3px; background:linear-gradient(90deg,var(--fx-c1),var(--fx-c2)); box-shadow:0 0 6px var(--fx-c2); }
+
+@media (prefers-reduced-motion: reduce){
+  .fx-stars i, .fx-prism{ animation:none !important; }
+  .fx-stars i{ opacity:.7; }
+}

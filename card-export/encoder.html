@@ -1,0 +1,13 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>card-export encoder</title>
+<!-- 匯出分享的編碼器：不顯示任何東西的隱藏頁面，由 exporter.js 開一個不可見視窗載入。
+     main process 把截好的畫面（JPEG）一張一張送進來，這裡負責壓成 WebM（WebCodecs + 自己刻的 WebM 封裝）
+     或 GIF（gifquant.js：每格本機色盤 + 誤差擴散 + LZW），編碼放在這個渲染程序，不會卡住桌面掛件外殼本身。 -->
+<script src="gifquant.js"></script>
+<script src="encoder.js"></script>
+</head>
+<body></body>
+</html>

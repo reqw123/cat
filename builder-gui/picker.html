@@ -1,0 +1,153 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>座標挑選器</title>
+<style>
+  html, body {
+    margin: 0; width: 100%; height: 100%;
+    background: transparent; overflow: hidden;
+    font: 13px/1.5 -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif;
+    user-select: none;
+  }
+  #card {
+    position: absolute;
+    box-sizing: border-box;
+    border: 2px dashed #38bdf8;
+    background: rgba(56, 189, 248, 0.14);
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: #e6f6ff;
+    text-shadow: 0 1px 3px rgba(0,0,0,.6);
+    cursor: grab;
+    /* 在真正收到 onInit 送來的初始座標（見下面 applyBox()）之前，#card 沒有
+       套用任何 left/top，會用瀏覽器預設的靜態流排版位置顯示（通常落在畫面
+       左上角附近），可能造成使用者一開啟挑選器，先看到方框在左上角閃一下、
+       才跳到（多半是螢幕正中央的）正確初始位置。開場先藏起來，applyBox()
+       第一次真正套用座標時再顯示，就不會有這個閃現的瞬間。 */
+    visibility: hidden;
+  }
+  #card.dragging { cursor: grabbing; background: rgba(56, 189, 248, 0.22); }
+  #cardFile { font-weight: 700; font-size: 14px; word-break: break-all; padding: 0 12px; }
+  #cardCoord { margin-top: 6px; font-size: 13px; opacity: .9; }
+  #cardHint { margin-top: 10px; font-size: 11px; opacity: .75; }
+  #panel {
+    position: fixed; left: 16px; top: 16px;
+    background: rgba(20, 22, 28, 0.92); border: 1px solid #2c3040;
+    border-radius: 10px; padding: 10px 12px; color: #e6e8ef;
+    box-shadow: 0 6px 20px rgba(0,0,0,.35);
+  }
+  #panel .title { font-weight: 700; margin-bottom: 6px; }
+  #panel .coord { color: #38bdf8; font-variant-numeric: tabular-nums; margin-bottom: 8px; }
+  #panel button {
+    background: #38bdf8; color: #06222b; border: none; border-radius: 6px;
+    padding: 6px 14px; font-weight: 700; cursor: pointer; font-size: 13px;
+  }
+  #panel button:hover { background: #6cd0fb; }
+</style>
+</head>
+<body>
+  <div id="card">
+    <div id="cardFile"></div>
+    <div id="cardCoord">x: 0, y: 0</div>
+    <div id="cardHint">按住滑鼠右鍵拖曳移動虛擬卡片</div>
+  </div>
+
+  <div id="panel">
+    <div class="title">🎯 座標挑選器</div>
+    <div class="coord" id="panelCoord">x: 0, y: 0</div>
+    <button id="btnDone">✅ 完成，關閉挑選器</button>
+  </div>
+
+<script>
+(function () {
+  const cardEl = document.getElementById('card');
+  const fileEl = document.getElementById('cardFile');
+  const coordEl = document.getElementById('cardCoord');
+  const panelCoordEl = document.getElementById('panelCoord');
+
+  let boxX = 0, boxY = 0, boxW = 560, boxH = 820;
+  let dragging = false;
+  let dragOffsetX = 0, dragOffsetY = 0;
+  let lastHover = false;
+
+  function applyBox() {
+    cardEl.style.left = boxX + 'px';
+    cardEl.style.top = boxY + 'px';
+    cardEl.style.width = boxW + 'px';
+    cardEl.style.height = boxH + 'px';
+    cardEl.style.visibility = 'visible'; // 第一次套用真正座標後才顯示，見上面 CSS 的說明
+    const text = `x: ${boxX}, y: ${boxY}`;
+    coordEl.textContent = text;
+    panelCoordEl.textContent = text;
+  }
+
+  window.picker.onInit((data) => {
+    boxX = Math.round(data.x || 0);
+    boxY = Math.round(data.y || 0);
+    boxW = data.w || 560;
+    boxH = data.h || 820;
+    fileEl.textContent = data.file || '(未命名卡片)';
+    applyBox();
+  });
+
+  function pointInBox(px, py) {
+    return px >= boxX && px <= boxX + boxW && py >= boxY && py <= boxY + boxH;
+  }
+
+  window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  window.addEventListener('mousedown', (e) => {
+    if (e.button !== 2) return;
+    if (!pointInBox(e.clientX, e.clientY)) return;
+    dragging = true;
+    cardEl.classList.add('dragging');
+    dragOffsetX = e.clientX - boxX;
+    dragOffsetY = e.clientY - boxY;
+    e.preventDefault();
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (dragging) {
+      boxX = Math.round(e.clientX - dragOffsetX);
+      boxY = Math.round(e.clientY - dragOffsetY);
+      applyBox();
+      window.picker.move(boxX, boxY);
+      return;
+    }
+    // 沒在拖曳時：滑鼠是否在方框或控制面板範圍內，決定這個視窗要不要繼續整個
+    // 穿透下去——只有需要互動的區域才「接住」滑鼠事件，其餘地方讓事件穿透到
+    // 底下的桌面/其他視窗，做法跟真正卡片外殼（C:\cat\main.js）同一種技巧。
+    const panelRect = document.getElementById('panel').getBoundingClientRect();
+    const overPanel = e.clientX >= panelRect.left && e.clientX <= panelRect.right
+      && e.clientY >= panelRect.top && e.clientY <= panelRect.bottom;
+    const hover = pointInBox(e.clientX, e.clientY) || overPanel;
+    if (hover !== lastHover) {
+      lastHover = hover;
+      window.picker.hover(hover);
+    }
+  });
+
+  function stopDrag() {
+    if (!dragging) return;
+    dragging = false;
+    cardEl.classList.remove('dragging');
+    window.picker.move(boxX, boxY);
+  }
+  window.addEventListener('mouseup', stopDrag);
+  window.addEventListener('mouseleave', stopDrag);
+  window.addEventListener('blur', stopDrag);
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') window.picker.close();
+  });
+
+  document.getElementById('btnDone').addEventListener('click', () => window.picker.close());
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "name": "jimmy-phantom-card-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "cards/jimmy_phantom_card.html 的透明背景／永遠置頂桌面掛件外殼（比照 desktop-pet 的做法）",
+  "main": "main.js",
+  "author": "reqw123",
+  "cardFile": "cards/jimmy_phantom_card.html",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable --config build/card-ez62.yml",
+    "builder-gui": "electron builder-gui/main.js"
+  },
+  "devDependencies": {
+    "electron": "^43.7.0",
+    "electron-builder": "^26.15.3",
+    "js-yaml": "^4.3.2"
+  }
+}

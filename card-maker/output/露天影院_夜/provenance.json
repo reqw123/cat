@@ -1,0 +1,10 @@
+{
+  "generator": "Gemini image API",
+  "model": "gemini-3.1-flash-image",
+  "background": "user's camp photo (night) used as-is",
+  "subject_source": "user's screenshot (tent), low-res with overlays",
+  "step1_clean_prompt": "Edit this photo. Remove ALL overlaid graphics: the logo in the top-right corner, the large yellow text banner along the bottom edge, the letter-and-number label near the bottom centre, the pagination dots, and the arrow icon at the left edge. Fill each removed area naturally (ground, foliage, wooden platform) so the result looks like an untouched original photograph without any text or UI. Do NOT change, restyle, repaint, add or remove anything else. Keep every object, its colours, materials, proportions, lighting and small details exactly as in the photo. Output the full frame at the same composition.",
+  "step2_isolate_prompt": "Isolate the main subject of this photo as a clean game-asset style cut-out: the wooden platform with the dark and mustard-yellow dome tent, the folding table with its items, the chairs, the black equipment box, the awning, and the white projector screen on its stand at the right, each with only a thin natural strip of ground/path under it. Replace the trees, sky, foliage, fence and everything else outside the subject with ONE solid flat pure magenta background (#FF00FF), perfectly uniform, no gradient. The subject was cropped by the photo frame: finish the cropped edges neatly and plausibly so the whole subject reads as one complete isolated vignette floating on the magenta, with a margin of magenta all around. No cast shadow on the background, no text. Keep the subject's colours, materials and details faithful to the photo.",
+  "step3": "tent only: recomposed via recompose_tent.py so the screen sits next to the platform (tent_iso2.png)",
+  "postprocess": "magenta key -> alpha (key_subject.py / key_camp2.py); mild night colour grade (x0.78,0.84,0.98)"
+}

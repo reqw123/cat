@@ -1,0 +1,43 @@
+# electron-builder 共用基礎設定，給 C:\cat 底下每一張全息殘影卡共用。
+# 這是「打包哪張卡」的共用骨架，真正決定包哪個 html、輸出叫什麼名字的是
+# package.json 的 cardFile 欄位 + productName——幫新卡片打包時不用複製這份
+# 檔案，寫一個小 override（extends 這份）覆蓋 productName/extraMetadata.cardFile
+# 就好，見 build/ 資料夾底下的範例（例如 gojo-phantom.yml）。
+#
+# C:\cat 底下還有其他跟這些桌面掛件無關的檔案（截圖、說明文件），所以 files
+# 用白名單只列會被用到的檔案，不用 "**/*" 整包資料夾都收進去；卡片本體 html
+# 都放在 cards/ 資料夾底下（跟 main.js/preload.js 等外殼程式碼分開放，見
+# 桌面掛件說明.md），方便看一眼就知道哪些是「卡片資源」、哪些是「外殼程式」。
+#
+# ⚠️ 這裡刻意不列出任何 cards/*.html：electron-builder 的 extends 合併設定
+# 時，陣列型別的欄位（files 就是）是「聯集」而不是「取代」（見
+# node_modules/builder-util-runtime/out/objects.js 的 assignKey()：
+# `Array.from(new Set(prevValue.concat(value)))`）——如果這裡放 "cards/*.html"
+# 這種涵蓋全部卡片的萬用字元，底下每個 build/*.yml 不管自己只用到哪張卡，
+# files 合併完永遠是「全部卡片都包進去」，等於白名單形同虛設。正確做法是
+# 這裡只列「每個 build 都一定會用到」的共用檔案，各卡片自己的 html 交給
+# 各自的 build/*.yml 自己加（見 build/gojo-phantom.yml 等範例），合併出來
+# 才會是「只有那個 build 真正用到的檔案」。這份基底本身不會單獨拿來打包
+# （沒有任何卡片 html），一定要搭配 build/ 底下某個 override 用：
+#   npx electron-builder --config build/<你的 override>.yml
+appId: com.reqw123.phantom-card-desktop
+productName: jimmy-phantom-card
+
+directories:
+  output: dist
+
+files:
+  - main.js
+  - preload.js
+  - package.json
+  - assets/tray-icon.png
+  - card-export/*
+  - "!cards/*複製*.html"
+
+asar: false
+
+win:
+  target: portable
+
+portable:
+  artifactName: "${productName}.exe"

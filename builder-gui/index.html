@@ -1,0 +1,2145 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>html 白名單管理</title>
+<style>
+  :root {
+    --bg: #14161c; --panel: #1c1f28; --border: #2c3040;
+    --text: #e6e8ef; --text2: #9aa0b4; --cyan: #38bdf8; --danger: #ff6b6b;
+    --ok: #55d67a; --warn: #ffb454;
+  }
+  * { box-sizing: border-box; }
+  /* 隱藏捲軸拉桿（整個視窗右側那條，以及對話框內部小面板自己的，例如下拉
+     選單、打包 log 區塊）——視窗本身不是固定死一頁塞不下的高度，內容一多就
+     需要捲動，但 Chromium 預設的捲軸拉桿是淺色系統樣式，跟這個深色主題完全
+     不搭、看起來很突兀。用 webkit 專屬的 ::-webkit-scrollbar 選擇器把拉桿的
+     可視寬高設為 0，滑鼠滾輪／觸控板捲動功能完全不受影響，只是不再畫出那條
+     拉桿。這個技巧只在 Chromium/WebKit 系列有效，但這整個專案本來就是
+     Electron（跑在 Chromium 上）專用，不需要顧慮其他瀏覽器引擎的相容性。 */
+  ::-webkit-scrollbar { width: 0; height: 0; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif;
+    padding: 20px;
+  }
+  h1 { font-size: 1.15em; margin: 0 0 4px; }
+  .sub { color: var(--text2); font-size: .85em; margin-bottom: 16px; }
+  .warn-banner {
+    background: rgba(255,180,84,.12); border: 1px solid rgba(255,180,84,.35);
+    color: var(--warn); border-radius: 8px; padding: 10px 12px; font-size: .85em;
+    margin-bottom: 18px; line-height: 1.6;
+  }
+  h2 { font-size: .95em; color: var(--text2); text-transform: uppercase; letter-spacing: .04em; margin: 24px 0 10px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .build-row {
+    display: flex; align-items: center; gap: 10px; padding: 10px 0;
+    border-bottom: 1px solid var(--border); flex-wrap: wrap;
+  }
+  .build-row:last-child { border-bottom: none; }
+  .build-row input[type=checkbox].row-check { flex: none; width: 16px; height: 16px; cursor: pointer; }
+  .batch-toolbar {
+    display: flex; align-items: center; gap: 12px; padding-bottom: 10px;
+    margin-bottom: 4px; border-bottom: 1px solid var(--border);
+  }
+  label.inline-chk { display: inline-flex; align-items: center; gap: 6px; font-size: .85em; cursor: pointer; }
+  button.danger { border-color: var(--danger); color: var(--danger); }
+  button.danger:hover { background: rgba(255,107,107,.12); }
+  .build-main { flex: 1; min-width: 0; }
+  .build-name { font-weight: 600; }
+  .build-detail { color: var(--text2); font-size: .82em; margin-top: 2px; word-break: break-all; }
+  .badge { font-size: .75em; padding: 2px 8px; border-radius: 999px; background: rgba(56,189,248,.15); color: var(--cyan); flex: none; }
+  .badge.err { background: rgba(255,107,107,.15); color: var(--danger); }
+  button {
+    background: transparent; color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: .85em;
+  }
+  button:hover { border-color: var(--cyan); color: var(--cyan); }
+  button.primary { background: var(--cyan); color: #06222b; border-color: var(--cyan); font-weight: 700; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  .empty-hint { color: var(--text2); padding: 12px 0; }
+  label.field { display: block; margin: 14px 0 6px; font-size: .85em; color: var(--text2); }
+  input[type=text] {
+    width: 100%; background: #10121a; border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 8px 10px; font-size: .9em;
+  }
+  input[type=number] {
+    background: #10121a; border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 6px 8px; font-size: .85em;
+  }
+  .radio-row { display: flex; gap: 16px; margin-top: 4px; }
+  .radio-row label { display: flex; align-items: center; gap: 6px; font-size: .9em; color: var(--text); }
+  .card-pick { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+  .card-pick .fname { flex: 1; word-break: break-all; }
+  .card-pick .fsize { color: var(--text2); font-size: .8em; flex: none; }
+  .slot-row {
+    display: flex; align-items: center; gap: 8px; padding: 6px 0;
+    border-bottom: 1px solid var(--border); flex-wrap: wrap;
+  }
+  .slot-row:last-child { border-bottom: none; }
+  .slot-idx { color: var(--text2); font-size: .8em; width: 26px; flex: none; text-align: right; }
+  /* 自己刻的下拉選單（不用原生 <select>，理由見 renderSlotEditor() 裡的說明）。 */
+  .custom-select { position: relative; flex: 1; min-width: 160px; }
+  .custom-select__trigger {
+    width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 6px;
+    background: #10121a; border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 6px 8px; font-size: .85em; text-align: left; cursor: pointer;
+  }
+  .custom-select__trigger span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .custom-select__trigger .chev { flex: none; opacity: .6; font-size: .8em; }
+  .custom-select__trigger:hover { border-color: var(--cyan); }
+  .custom-select__trigger.missing { border-color: var(--danger); color: var(--danger); }
+  .custom-select__menu {
+    position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20;
+    background: #14161c; border: 1px solid var(--border); border-radius: 8px;
+    max-height: 220px; overflow-y: auto; box-shadow: 0 10px 24px rgba(0,0,0,.5);
+    display: none;
+  }
+  .custom-select__menu.open { display: block; }
+  .custom-select__option {
+    padding: 6px 10px; font-size: .85em; color: var(--text); cursor: pointer; word-break: break-all;
+  }
+  .custom-select__option:hover, .custom-select__option.active { background: rgba(56,189,248,.15); color: var(--cyan); }
+  .custom-select__option.missing-file { color: var(--danger); }
+  .custom-select__option.missing-file:hover { background: rgba(255,107,107,.15); }
+  .slot-row input[type=number] {
+    width: 74px; background: #10121a; border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 6px 8px; font-size: .85em;
+  }
+  .slot-xy-label { color: var(--text2); font-size: .78em; }
+  .btn-row { display: flex; gap: 10px; margin-top: 16px; }
+  /* white-space:pre-line 放在共用的 .msg（不是只放在 .msg.err）：批次打包的
+     結果摘要（見 startBatchPackaging()）不管整批是不是全部成功，內容都可能是
+     好幾行（一份設定一行），全部成功時套用的是 .msg.ok，也需要保留換行。 */
+  .msg { font-size: .85em; margin-top: 10px; min-height: 1.4em; white-space: pre-line; }
+  .msg.ok { color: var(--ok); }
+  .msg.err { color: var(--danger); }
+  .badge.packaging { background: rgba(255,180,84,.15); color: var(--warn); }
+  /* 正在編輯的那一列：左側紫色色條＋淡紫底＋「✏️ 編輯中」標籤（跟表單標題「編輯：xxx.yml」對得起來） */
+  .badge.editing { background: rgba(167,139,250,.2); color: #c4b5fd; font-weight: 600; }
+  .build-row.editing { background: rgba(167,139,250,.07); box-shadow: inset 3px 0 0 #a78bfa; padding-left: 8px; }
+  .cycle-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+  .cycle-row input[type=number] { width: 90px; }
+  .cycle-row .cycle-hint { color: var(--text2); font-size: .78em; }
+  .cycle-row label.chk { display: flex; align-items: center; gap: 6px; font-size: .85em; }
+  .stage-preview-wrap { margin-top: 16px; }
+  .stage-preview-wrap .title { font-size: .85em; color: var(--text2); margin-bottom: 8px; }
+  .stage-preview {
+    position: relative; margin: 0 auto; background: #05070c;
+    border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+    background-image:
+      linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+  /* 每格「可互動範圍」的邊界（main.js 實際拿來當視窗/iframe 大小的
+     560×820）——虛線標出來純粹是資訊性的，讓使用者看得出這塊透明可拖曳/可
+     點擊的範圍比卡片本體大很多，不是卡片真正的視覺邊界。 */
+  .mini-slot-box {
+    position: absolute; box-sizing: border-box;
+    border: 1px dashed rgba(255,255,255,.14); border-radius: 4px;
+  }
+  /* 螢幕實際邊界（0,0 到螢幕工作區寬高）：main.js 的多卡合一視窗跟單卡視窗
+     都是用這個工作區座標系決定卡片位置，格位/開機位置只要超出這條線，代表
+     那部分會跑到螢幕外面看不到——用醒目的青色實線＋角落標籤標出來，跟純粹
+     資訊性、不代表視覺邊界的 .mini-slot-box 虛線區分開，一眼就能分辨「這條
+     才是真正決定看不看得到」的邊界。pointer-events:none 純粹疊加顯示，不擋
+     底下卡片/挑座標按鈕的點擊。 */
+  .screen-boundary {
+    position: absolute; box-sizing: border-box; pointer-events: none;
+    border: 2px solid rgba(56,189,248,.6); border-radius: 4px;
+  }
+  .screen-boundary__label {
+    position: absolute; left: 4px; top: 4px;
+    font-size: 11px; color: var(--cyan); background: rgba(20,22,28,.85);
+    padding: 1px 6px; border-radius: 4px; white-space: nowrap;
+  }
+  /* 卡片本體的視覺呈現：位置/大小都是照 cards/*.html 實際的 CSS 算出來的
+     （.stage padding:60px 22px 26px、--card-w 在 560×820 容器裡永遠會卡到
+     clamp() 的上限 372px、aspect-ratio:100/140），不是隨便填滿整個容器，
+     跟現有卡片設計的比例一致，見 renderCardSlotVisual()。 */
+  .mini-card {
+    position: absolute; border-radius: 14px;
+    background: linear-gradient(115deg,
+      #241a05 0%, #8a6a1c 9%, #d8b352 19%, #fff6d8 27%, #b98d2e 35%,
+      #5c4610 47%, #9a7a24 58%, #f4e2a0 70%, #7c5f18 84%, #241a05 100%);
+    box-shadow: 0 6px 16px rgba(0,0,0,.5);
+  }
+  .mini-card__inner {
+    position: absolute; border-radius: 10px;
+    background: radial-gradient(120% 78% at 50% -6%, #142833 0%, #09121a 52%, #05090d 100%);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; overflow: hidden; padding: 2px;
+  }
+  .mini-card__idx { font-weight: 700; color: #f4e2a0; line-height: 1.3; }
+  .mini-card__file { color: #8fa5bd; word-break: break-all; line-height: 1.2; padding: 0 4px; }
+  /* 翻面／旋轉預覽用：卡片變成 3D（preserve-3d），正面 .mini-card__inner 與背面 .mini-card__back 都 backface-visibility:hidden，
+     轉過 90° 就換成卡背（金框那層本身兩面都看得到，跟真正卡片的金屬外框一樣）。 */
+  .mini-card { transform-style: preserve-3d; }
+  .mini-card__inner { backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+  .mini-card__back {
+    position: absolute; overflow: hidden; backface-visibility: hidden; -webkit-backface-visibility: hidden; transform: rotateY(180deg);
+    background: radial-gradient(120% 78% at 50% 42%, #0f3a3a 0%, #082326 55%, #041214 100%);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .mini-card__glyph { color: #7ee8d8; font-weight: 800; text-shadow: 0 0 8px rgba(126,232,216,.7); }
+  /* 挑座標期間的狀態提示：故意做成右下角的小浮動卡片，不是蓋滿整頁的深色
+     遮罩——蓋滿整頁會把「📐 座標定義與預覽」那塊面板一起蓋住，使用者反而看
+     不到自己正在拖曳的座標即時更新在預覽圖上的位置，等於讓這個提示本身擋住
+     了它應該輔助的東西。真正擋互動的是 #appRoot.inert（見
+     updatePickerBlockOverlay()），這個小卡片單純只是狀態提示＋取消按鈕，不
+     疊加任何全頁遮罩／不降低其餘畫面的可見度。 */
+  #pickerBlockOverlay {
+    position: fixed; right: 20px; bottom: 20px; z-index: 1000;
+    max-width: 320px;
+  }
+  .picker-block-box {
+    text-align: left; padding: 14px 16px;
+    background: var(--panel); border: 1px solid var(--cyan); border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0,0,0,.5);
+  }
+  .picker-block-title { font-size: .95em; font-weight: 700; color: var(--cyan); margin-bottom: 6px; }
+  .picker-block-hint { color: var(--text2); font-size: .8em; line-height: 1.6; margin-bottom: 10px; }
+  #packageLogBox { margin-top: 14px; }
+  #packageLogBox pre {
+    background: #0c0e14; border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; max-height: 260px; overflow: auto; font-size: .78em;
+    white-space: pre-wrap; word-break: break-all; margin: 8px 0 0;
+  }
+
+  /* ==================== 圖片一鍵生成卡片 ==================== */
+  .mk-grid { display: grid; grid-template-columns: 190px 1fr; gap: 16px; align-items: start; }
+  .mk-drop {
+    border: 2px dashed var(--border); border-radius: 10px; min-height: 270px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; color: var(--text2); font-size: .85em; line-height: 1.6; cursor: pointer;
+    background: #10121a center / contain no-repeat; padding: 10px; transition: border-color .15s, background-color .15s;
+  }
+  .mk-drop span { font-size: .8em; opacity: .75; }
+  .mk-drop:hover, .mk-drop.over { border-color: var(--cyan); color: var(--cyan); background-color: rgba(56,189,248,.08); }
+  .mk-drop.has-img { color: transparent; border-style: solid; }
+  .mk-drop.has-img span { display: none; }
+  .mk-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; min-width: 0; }
+  .mk-fields .full { grid-column: 1 / -1; }
+  .mk-fields label.mk-l { display: block; font-size: .78em; color: var(--text2); margin-bottom: 3px; }
+  .mk-opts { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  .mk-opts label { display: inline-flex; align-items: center; gap: 5px; font-size: .84em; cursor: pointer; }
+  .mk-log { max-height: 110px; overflow-y: auto; font-size: .72em; color: var(--text2); margin: 8px 0 0; white-space: pre-wrap; word-break: break-all; }
+  .mk-result { display: none; margin-top: 14px; gap: 16px; align-items: flex-start; }
+  .mk-result.show { display: flex; }
+  .mk-preview-box { width: 300px; height: 440px; flex: none; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: #05070c; position: relative; }
+  .mk-preview-box iframe { position: absolute; left: 0; top: 0; width: 560px; height: 820px; border: 0; transform: scale(.5366); transform-origin: 0 0; }
+  .mk-swatches { display: flex; gap: 6px; margin: 6px 0 10px; }
+  .mk-swatch { width: 34px; height: 34px; border-radius: 8px; border: 1px solid rgba(255,255,255,.18); }
+</style>
+</head>
+<body>
+<div id="appRoot">
+  <h1>🎴 html 白名單管理</h1>
+  <div class="sub">選要打包進哪個 exe 的卡片 html，自動同步 build/*.yml 的 files 白名單跟 cardFile／cards，不用手動對照兩邊。</div>
+
+  <div class="warn-banner">
+    ⚠️ 這裡存檔的 build/*.yml 會用簡短的自動產生註解，<b>不會保留原本手寫的詳細說明文字</b>（例如網格座標怎麼算出來的那些筆記）。
+    存檔前會自動把舊檔案備份到 <code>build/.bak/</code>，想找回原本的完整說明可以去那裡撈；C:\cat 本身沒有 git，這是唯一的復原手段。
+    只是想加減卡片、不想動說明文字的話，直接手動編輯 yml 檔案會比較保險。
+  </div>
+
+  <h2>現有設定</h2>
+  <div class="panel" id="buildList"><div class="empty-hint">讀取中...</div></div>
+
+  <div class="panel" id="packageLogBox" style="display:none;">
+    <div class="build-name" id="packageLogTitle"></div>
+    <div class="msg" id="packageMsg"></div>
+    <pre id="packageLog"></pre>
+    <div class="btn-row">
+      <button id="btnRevealExe" style="display:none;">📂 開啟所在資料夾</button>
+      <button id="btnCancelPackaging" class="danger" style="display:none;">✖️ 取消打包</button>
+    </div>
+  </div>
+
+  <h2>🪄 圖片一鍵生成卡片</h2>
+  <div class="panel" id="makerPanel">
+    <div class="sub" style="margin-bottom:12px;">拖入（或點擊選擇、Ctrl+V 貼上）一張圖片 → 自動去背、抽主色、推導 <code>:root</code> 配色與全息色階 → 輸出成 <code>cards/&lt;名稱&gt;_phantom_card.html</code>（跟六狗系列同架構：360° 環轉、卡背、雙擊翻面、F4 自動翻面）。完成後會直接出現在下面的卡片清單，可以馬上拿去打包。需要本機 Python + rembg（見 <code>card-maker/make_card.py</code>），第一次用某個去背模型會下載約 170MB。</div>
+    <div class="mk-grid">
+      <div>
+        <div id="mkDrop" class="mk-drop" tabindex="0" title="點擊選擇圖片，或把圖片拖到這裡">拖曳圖片到這裡<br /><span>點擊選擇 · 或 Ctrl+V 貼上</span></div>
+        <input type="file" id="mkFile" accept="image/*" hidden />
+        <div class="cycle-hint" id="mkFileName" style="margin-top:6px; word-break:break-all;"></div>
+      </div>
+      <div class="mk-fields">
+        <div><label class="mk-l" for="mkName">卡片名稱（也決定檔名）</label><input type="text" id="mkName" maxlength="40" placeholder="留空＝用圖片檔名" /></div>
+        <div><label class="mk-l" for="mkEyebrow">名稱上方小標題</label><input type="text" id="mkEyebrow" maxlength="60" placeholder="PHANTOM RESIDUAL" /></div>
+        <div><label class="mk-l" for="mkSkillName">技能名稱</label><input type="text" id="mkSkillName" maxlength="30" placeholder="幻影殘響" /></div>
+        <div><label class="mk-l" for="mkSkillEn">技能英文副標</label><input type="text" id="mkSkillEn" maxlength="50" placeholder="Phantom Echo" /></div>
+        <div class="full"><label class="mk-l" for="mkSkillDesc">技能說明（用 **兩個星號** 包起來會變粗體發光）</label><input type="text" id="mkSkillDesc" maxlength="200" placeholder="在戰場留下一道時空殘影。受到攻擊時有 **40%** 機率閃避，並發動殘影反擊。" /></div>
+        <div><label class="mk-l" for="mkElement">左上屬性晶片</label><input type="text" id="mkElement" maxlength="30" placeholder="留空＝依主色自動挑，例如 ◈ WIND 風" /></div>
+        <div><label class="mk-l" for="mkGlyph">卡背大字（1～2 字）</label><input type="text" id="mkGlyph" maxlength="2" placeholder="留空＝名稱第一個字" /></div>
+        <div class="full"><label class="mk-l">稀有度</label>
+          <div class="mk-opts" id="mkRarity">
+            <label><input type="radio" name="mkRarity" value="SR" /> SR</label>
+            <label><input type="radio" name="mkRarity" value="SSR" checked /> SSR</label>
+            <label><input type="radio" name="mkRarity" value="UR" /> UR</label>
+            <label><input type="radio" name="mkRarity" value="LR" /> LR</label>
+          </div></div>
+        <div class="full"><label class="mk-l">去背方式（圖片本身已有透明背景會自動跳過去背）</label>
+          <div class="mk-opts">
+            <label><input type="radio" name="mkModel" value="isnet-anime" checked /> 動漫角色（isnet-anime）</label>
+            <label><input type="radio" name="mkModel" value="isnet-general-use" /> 照片／動物（isnet-general-use）</label>
+            <label><input type="radio" name="mkModel" value="none" /> 不去背（整張圖羽化當主體）</label>
+          </div></div>
+        <div class="full"><label class="mk-l">全息背景效果</label>
+          <div class="mk-opts">
+            <label><input type="radio" name="mkHolo" value="auto" checked /> 依主色自動</label>
+            <label><input type="radio" name="mkHolo" value="dust" /> 粒子</label>
+            <label><input type="radio" name="mkHolo" value="chrome_scan" /> 掃光</label>
+            <label><input type="radio" name="mkHolo" value="embers" /> 餘燼</label>
+            <label><input type="radio" name="mkHolo" value="grid_bokeh" /> 網格</label>
+            <label><input type="radio" name="mkHolo" value="radar" /> 雷達</label>
+            <label><input type="radio" name="mkHolo" value="speedlines" /> 速度線</label>
+          </div></div>
+        <div class="full"><label class="chk" style="display:inline-flex; align-items:center; gap:6px; font-size:.84em;"><input type="checkbox" id="mkOverwrite" /> 已有同名檔案時覆蓋（不勾＝重名會拒絕，不會弄丟舊卡）</label></div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button id="btnMakeCard" class="primary" disabled>🪄 生成卡片</button>
+      <button id="btnCancelMake" class="danger" style="display:none;">✖️ 取消</button>
+    </div>
+    <div class="msg" id="mkMsg"></div>
+    <pre class="mk-log" id="mkLog" style="display:none;"></pre>
+    <div class="mk-result" id="mkResult">
+      <div class="mk-preview-box"><iframe id="mkPreview" title="生成結果預覽"></iframe></div>
+      <div style="min-width:0;">
+        <div class="build-name" id="mkResultName"></div>
+        <div class="build-detail" id="mkResultDetail"></div>
+        <div class="mk-swatches" id="mkSwatches"></div>
+        <div class="btn-row" style="margin-top:0;"><button id="btnMkReveal">📂 在檔案總管顯示</button></div>
+        <div class="cycle-hint" style="margin-top:10px;">預覽可以直接拖曳旋轉、雙擊翻面。不滿意可以換一種去背方式／全息效果，勾「覆蓋同名檔案」重新生成。</div>
+      </div>
+    </div>
+  </div>
+
+  <h2 id="formTitle">新增設定</h2>
+  <div class="panel">
+    <label class="field">Product name（決定 exe 檔名；可以直接打中文，例如「吉米幻影卡」——中文名稱存檔時 yml 檔名會自動改用一串英數代號，不影響你設定的顯示名稱）</label>
+    <input type="text" id="productName" placeholder="例如 gojo-phantom 或 吉米幻影卡" />
+
+    <label class="field">模式</label>
+    <div class="radio-row">
+      <label><input type="radio" name="mode" value="single" checked /> 單卡（一個視窗一張卡）</label>
+      <label><input type="radio" name="mode" value="multi" /> 多卡合一（一個視窗多張卡，iframe 疊）</label>
+    </div>
+
+    <label class="field">🔍 卡片整體縮放比例（以現有卡片設計 560×820 為基準等比例縮放，單卡、多卡都適用；不是只放大容器——連卡片視覺本身也會跟著等比例變大/變小，不受卡片本體 CSS 272~372px 的固定範圍限制）</label>
+    <div class="cycle-row" style="margin-top:0;">
+      <input type="number" id="cardScalePercent" value="100" min="20" max="300" step="5" style="width:90px;" />
+      <span class="slot-xy-label">%（100% ＝原始大小）</span>
+    </div>
+
+    <label class="field">⌨️ 快捷鍵（都是全域快捷鍵，留空用預設值；同時開好幾個 exe 想避免搶同一個鍵，可以在這裡各自改成不同鍵）</label>
+    <div class="cycle-row" style="margin-top:0;">
+      <span class="slot-xy-label">切換互動/穿透</span>
+      <input type="text" id="toggleKey" placeholder="F9" style="width:70px;" />
+      <span class="slot-xy-label">結束程式</span>
+      <input type="text" id="quitKey" placeholder="F10" style="width:70px;" />
+      <span class="slot-xy-label" id="cycleKeyLabel" style="display:none;">時鐘循環</span>
+      <input type="text" id="cycleKey" placeholder="F8" style="width:70px; display:none;" />
+      <span class="slot-xy-label" id="gestureKeyLabel" style="display:none;">手勢散開/收縮</span>
+      <input type="text" id="gestureKey" placeholder="F7" style="width:70px; display:none;" />
+      <span class="slot-xy-label" id="skeletonKeyLabel" style="display:none;">骨架視覺效果開關</span>
+      <input type="text" id="skeletonKey" placeholder="F6" style="width:70px; display:none;" />
+      <span class="slot-xy-label">重設卡片位置</span>
+      <input type="text" id="resetKey" placeholder="F11" style="width:70px;" />
+      <span class="slot-xy-label">自動翻面循環</span>
+      <input type="text" id="autoFlipKey" placeholder="F4" style="width:70px;" />
+      <span class="slot-xy-label">技能演出</span>
+      <input type="text" id="skillKey" placeholder="Ctrl+Alt+1" style="width:100px;" />
+      <span class="slot-xy-label">切換稀有度</span>
+      <input type="text" id="rarityKey" placeholder="Ctrl+Alt+2" style="width:100px;" />
+      <span class="slot-xy-label">音效靜音</span>
+      <input type="text" id="muteKey" placeholder="Ctrl+Alt+3" style="width:100px;" />
+      <span class="slot-xy-label">放大</span>
+      <input type="text" id="zoomInKey" placeholder="Ctrl+Alt+=" style="width:100px;" />
+      <span class="slot-xy-label">縮小</span>
+      <input type="text" id="zoomOutKey" placeholder="Ctrl+Alt+-" style="width:100px;" />
+      <span class="slot-xy-label">更不透明</span>
+      <input type="text" id="opacityUpKey" placeholder="Ctrl+Alt+]" style="width:100px;" />
+      <span class="slot-xy-label">更透明</span>
+      <input type="text" id="opacityDownKey" placeholder="Ctrl+Alt+[" style="width:100px;" />
+      <span class="slot-xy-label">匯出分享</span>
+      <input type="text" id="exportKey" placeholder="Ctrl+Alt+4" style="width:100px;" />
+      <span class="slot-xy-label" id="exportLayoutKeyLabel" style="display:none;" title="多卡才用：把整個版面（所有卡一起）匯出成一支影片／GIF／PNG">匯出整個版面</span>
+      <input type="text" id="exportLayoutKey" placeholder="Ctrl+Alt+5" style="display:none;width:100px;" />
+      <span class="slot-xy-label">匯出格式</span>
+      <select id="exportFormat"><option value="webm">WebM 影片（旋轉一圈）</option><option value="gif">GIF 動圖（旋轉一圈）</option><option value="png">PNG 圖片（透明背景）</option></select>
+      <span class="slot-xy-label" title="GIF 匯出的尺寸倍率。單張卡：500×680 像素 × 倍率。倍率越大越清楚、檔案也越大（旋轉一圈 3 秒：1.5 倍約 15～20 MB、1 倍約 8～10 MB、0.8 倍約 5～6 MB）。多卡版面的長邊約為倍率 × 900 像素。WebM／PNG 不受影響">GIF 尺寸</span>
+      <select id="gifScale"><option value="0.8">小（0.8×，檔案最小）</option><option value="1">中（1×）</option><option value="1.5" selected>大（1.5×，預設，高畫質）</option><option value="2">特大（2×，檔案很大）</option></select>
+    </div>
+    <label class="chk" style="margin-top:10px; display:flex; align-items:center; gap:6px; font-size:.85em;"><input type="checkbox" id="launchAtLogin" /> 🚀 開機自動啟動（Windows 登入時自動打開這個掛件；只在這個 exe「第一次啟動」時套用一次，之後可在系統匣選單勾選/取消）</label>
+    <label class="chk" style="margin-top:6px; display:flex; align-items:center; gap:6px; font-size:.85em;"><input type="checkbox" id="ambientStars" /> ✨ 環境星光（卡面上常駐的小星星，數量依稀有度 SR 10／SSR 24／UR 48／LR 72 顆；<b>預設不勾＝以前沒有小星星的樣子</b>；技能演出的粒子與稀有度的其他效果不受影響，匯出的影片／圖片也會照這個設定）</label>
+    <div class="cycle-hint" id="shortcutHint" style="margin:6px 0 0; line-height:1.7;"></div>
+
+    <label class="field" id="offsetLabel">開機預設位置（單卡模式才需要）——只有「這個 exe 第一次啟動、還沒被使用者右鍵拖曳過」時生效，相對螢幕正中央的偏移量；拖過一次之後位置會自己存檔，這裡的值就不會再生效了。同時開好幾個單卡 exe 想第一次啟動就不疊在一起，可以先在這裡錯開</label>
+    <div id="offsetRow" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+      <span class="slot-xy-label">x</span>
+      <input type="number" id="offsetX" value="0" style="width:90px;" />
+      <span class="slot-xy-label">y</span>
+      <input type="number" id="offsetY" value="0" style="width:90px;" />
+      <button id="btnPickSingleCoord" type="button" title="開一個蓋滿螢幕的挑選器視窗，用滑鼠右鍵拖曳一張跟真正卡片一樣大的虛擬卡片來決定開機位置，比自己猜數字準——放開滑鼠座標會即時同步回上面的 x/y 偏移量">🎯 挑座標</button>
+    </div>
+    <div class="stage-preview-wrap" id="singleStagePreviewWrap" style="display:none;">
+      <div class="title">📐 開機位置預覽（相對整個螢幕的位置；卡片容器大小同現有卡片設計 560×820，等比縮小顯示）</div>
+        <div class="cycle-row" style="margin:6px 0 8px;">
+          <label class="chk"><input type="checkbox" class="animFlipToggle" /> ▶️ 翻面動畫預覽</label>
+          <label class="chk"><input type="checkbox" class="animSpinToggle" /> ▶️ 旋轉一圈預覽</label>
+          <span class="cycle-hint animHint"></span>
+        </div>
+      <div class="stage-preview" id="singleStagePreview"></div>
+    </div>
+
+    <div class="field" style="display:flex; align-items:flex-end; justify-content:space-between; gap:10px;">
+      <label id="pickLabelSingle" style="margin:0;">要打包的卡片（選一張＝這個 build 唯一載入的 html，同時也是 files 白名單的內容）</label>
+      <label id="pickLabelMulti" style="margin:0; display:none;">格位（每一列＝畫面上一個位置，指定放哪張卡、貼在哪個座標——這就是「決定某張卡在某個位置」的地方；同一張卡可以出現在好幾格）</label>
+      <button id="btnRefreshCards" style="flex:none;" title="cards/ 資料夾裡剛加的新 html 不會自動出現，按這顆重新讀一次資料夾（不會弄丟你正在編輯的內容）">🔄 重新整理卡片清單</button>
+    </div>
+
+    <!-- 單卡模式：從 cards/ 選一張當這個視窗唯一顯示的卡 -->
+    <div id="cardPickList" class="empty-hint">讀取中...</div>
+
+    <!-- 多卡模式：明確列出每一格要放哪張卡＋座標，取代舊版「勾選＋貼幾格」那種
+         只能決定「用幾次」、決定不了「哪一格是誰」的做法。 -->
+    <div id="slotEditor" style="display:none;">
+      <div id="slotList" class="empty-hint">還沒有任何格位</div>
+      <div class="btn-row">
+        <button id="btnAddSlot">➕ 新增格位</button>
+        <button id="btnAutoGrid" title="把目前所有格位依序重新排成標準 5 欄網格（跟 build/ten-card-grid.yml 同一種排法），會覆蓋掉現有座標">🔲 全部重新排成網格</button>
+        <button id="btnFiveGrid" title="一鍵排成 5 卡版面（中央＋四角）：第 1 張固定在正中央，其餘 4 張站四個角落（左上、右上、右下、左下）。四個角的座標跟 6 卡版面的四個角一樣（x=101／1241、上排 y=-136／下排 y=396），中央那張在兩排的正中間（x=671、y=130）。時鐘式循環（F8）在剛好 5 張時只讓四個角落的卡繞著第 1 張轉，第 1 張不動。會把格位補/裁到剛好 5 格（不夠時優先補上還沒用過的卡片），並覆蓋掉現有座標">🎴 一鍵排成 5 卡（中央＋四角）</button>
+        <button id="btnSixGrid" title="排成 6 卡版面（上三下三）。中間欄固定在 10 卡網格的中央欄，左右欄跟中間欄的間距是 10 卡欄距的 1.5 倍（比緊貼寬、比原本兩倍欄距窄），列距跟 10 卡一樣，會把格位數量補/裁到剛好 6 格，並覆蓋掉現有座標">🎴 排成 6 卡（上三下三）</button>
+        <button id="btnTenGrid" title="一鍵排成 10 卡版面（上五下五）。座標邏輯跟 6 卡一樣：中間欄固定在 x=671、上排 y=-136／下排 y=396（列距 532）、上下兩排每一欄左右對齊；欄距 380（5 欄剛好排進 1920 寬的螢幕，欄距再大就會超出螢幕）。會把格位補/裁到剛好 10 格（不夠時優先補上還沒用過的卡片，用完才重複），並覆蓋掉現有座標">🎴 一鍵排成 10 卡（上五下五）</button>
+      </div>
+
+      <div class="cycle-row">
+        <label class="field" style="margin:0;">🕐 時鐘式循環（3 張以上；剛好 5 張＝中央那張不動、其餘四張繞著它轉）：轉一圈秒數</label>
+        <input type="number" id="cyclePeriodSeconds" value="10" min="1" step="1" />
+        <label class="chk"><input type="checkbox" id="cyclePreviewToggle" /> ▶️ 播放動畫預覽</label>
+        <span class="cycle-hint" id="cyclePreviewHint"></span>
+      </div>
+
+      <div class="cycle-row">
+        <label class="field" style="margin:0;">🖐️✊ 手勢散開／收縮：過渡秒數（跟 C:\hand-tracker 手勢辨識搭配，任何格數都適用）</label>
+        <input type="number" id="gestureTransitionSeconds" value="3" min="0.1" step="0.1" />
+        <label class="chk"><input type="checkbox" id="gesturePreviewToggle" /> ▶️ 播放動畫預覽</label>
+        <span class="cycle-hint" id="gesturePreviewHint"></span>
+      </div>
+      <div class="cycle-row">
+        <button id="btnPreviewPaper" type="button" title="模擬偵測到「布」：所有卡片以圓圈形式向外等距散開">🖐️ 模擬散開</button>
+        <button id="btnPreviewFist" type="button" title="模擬偵測到「拳頭」：所有卡片等距離向內收縮疊成一張">✊ 模擬收縮</button>
+        <button id="btnPreviewGestureReset" type="button" title="回到目前設定的原始格位座標">↩️ 回到原始座標</button>
+      </div>
+      <div class="cycle-row">
+        <label class="chk"><input type="checkbox" id="gestureShowSkeleton" checked /> 🦴 顯示手部骨架視覺效果（復刻 C:\hand-tracker 的發光骨架，開啟手勢偵測時疊加顯示；關掉只保留手勢控制卡片，畫面不疊加骨架）</label>
+      </div>
+
+      <div class="stage-preview-wrap" id="stagePreviewWrap" style="display:none;">
+        <div class="title">📐 座標定義與預覽（卡片外寬／容器大小同現有卡片設計 560×820，等比縮小顯示）</div>
+        <div class="cycle-row" style="margin:6px 0 8px;">
+          <label class="chk"><input type="checkbox" class="animFlipToggle" /> ▶️ 翻面動畫預覽</label>
+          <label class="chk"><input type="checkbox" class="animSpinToggle" /> ▶️ 旋轉一圈預覽</label>
+          <span class="cycle-hint animHint"></span>
+        </div>
+        <div class="stage-preview" id="stagePreview"></div>
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button id="btnSave" class="primary">💾 儲存</button>
+      <button id="btnNew">✨ 清空重新開始（新增）</button>
+    </div>
+    <div class="msg" id="formMsg"></div>
+  </div>
+</div>
+
+<!-- 挑座標期間的狀態提示：座標挑選器（虛擬卡片視窗）開著的時候，這裡（設定
+     視窗）不能再做別的操作——不然使用者可能一邊拖著虛擬卡片、一邊在這裡切換
+     模式／編輯別的設定／按儲存，兩邊狀態會對不起來（例如格位在拖曳途中被
+     刪掉，或者存檔存到一半才更新的座標）。#appRoot 開著挑選器時會被設成
+     inert（Chromium 原生支援，整個子樹連同鍵盤/滑鼠/無障礙焦點一起停用，
+     不用自己一個一個 disable 元件）——這是唯一真正擋互動的機制。這個提示卡片
+     本身刻意做成右下角一小塊、不加任何全頁遮罩（見上面 CSS 的說明），不會蓋住
+     「📐 座標定義與預覽」面板，使用者拖曳虛擬卡片時還是看得到預覽即時更新。
+     真正解除操作一定要等挑選器視窗確實關閉（bg.onPickerClosed()），不是使用者
+     自己猜著什麼時候可以動——見 index.html 的 updatePickerBlockOverlay()。 -->
+<div id="pickerBlockOverlay" style="display:none;">
+  <div class="picker-block-box">
+    <div class="picker-block-title">🎯 正在挑選座標…</div>
+    <div class="picker-block-hint">請在螢幕上按住滑鼠右鍵拖曳虛擬卡片決定位置，完成後按挑選器面板的「✅ 完成」（或按 Esc）。設定視窗在挑選器關閉前無法操作。</div>
+    <button id="btnCancelPicker">✖️ 取消挑選</button>
+  </div>
+</div>
+
+<script>
+  const bg = window.builderGui;
+  let cards = [];       // [{file, sizeBytes}]
+  let builds = [];      // parseBuildFile() 結果
+  let editingFilename = null;      // null = 新增模式；有值 = 正在編輯這個檔案
+  // 多卡模式的格位清單，一格一筆、順序＝畫面顯示順序＝最後存進 cards[] 的順序。
+  // 這是「決定哪張卡在哪個位置」這個功能的核心狀態：每一格自己記自己的
+  // file/x/y，不是像舊版那樣用「勾選＋貼幾格」去推算，使用者可以直接看著清單
+  // 指定第幾格要放哪張卡。main.js 的 saveBuild() 完全照這裡送過去的內容寫檔，
+  // 不會另外重新計算位置。
+  let slots = []; // [{file, x, y}, ...]
+  let slotRowRefs = []; // renderSlotEditor() 畫出來的 <input> 參照，索引對應 slots[]，
+                         // 給座標挑選器拖曳時直接更新畫面用（不用整個重畫，拖曳才不會頓）
+  let pickingIndex = null; // 目前正在用座標挑選器調整哪一格；null＝沒有在挑
+  let openCardDropdown = null; // 目前開著的自訂下拉選單（.custom-select__menu DOM 節點），同時只能開一個
+
+  // 挑座標期間整頁遮罩：只要 pickingIndex 不是 null（不管是多卡某一格、還是
+  // 單卡開機位置），就把 #appRoot 設成 inert 並蓋上遮罩，確保使用者一定要
+  // 先讓挑選器視窗真的關閉（觸發 bg.onPickerClosed()，把 pickingIndex 設回
+  // null）才能繼續操作設定視窗——不會有「挑選器還開著、座標還沒定案，使用者
+  // 卻已經跑去切模式/存檔/刪別的設定」這種狀態不一致的情況。每次 pickingIndex
+  // 改變都要呼叫這個函式同步畫面，不要只改變數不更新遮罩。
+  function updatePickerBlockOverlay() {
+    const picking = pickingIndex !== null;
+    document.getElementById('appRoot').inert = picking;
+    document.getElementById('pickerBlockOverlay').style.display = picking ? '' : 'none';
+  }
+  document.getElementById('btnCancelPicker').addEventListener('click', () => bg.closePicker());
+
+  function closeAllCardDropdowns() {
+    if (openCardDropdown) { openCardDropdown.classList.remove('open'); openCardDropdown = null; }
+  }
+  // 點選單以外的地方一律關掉——跟原生 <select> 的行為一致，選單本身的點擊
+  // 已經在各自的 click handler 裡 stopPropagation()，不會被這裡誤關。
+  document.addEventListener('click', closeAllCardDropdowns);
+
+  // 「座標定義與預覽」＋「六卡時鐘式循環轉動速度預覽」：卡片外寬／容器大小的
+  // 基準值直接沿用 C:\cat\main.js 的 WIN_W/WIN_H 原始設計（560×820，真正桌面
+  // 掛件每格 iframe 的大小，也是卡片本體＋金屬外框陰影暈染的實際留白範圍），
+  // 再依「🔍 卡片整體縮放比例」欄位即時換算成目前實際大小（見下面
+  // updateCardScale()）——main.js 那邊也是用同一個 CARD_SCALE 倍率、同一條
+  // Math.round(560*scale) 公式算 WIN_W/WIN_H，兩邊算出來的容器大小完全一致，
+  // 預覽才不會跟實際掛件對不起來。
+  //
+  // 卡片「本體」的實際位置/大小——跟外層容器不是同一件事，容器只是 main.js
+  // 拿來當視窗/iframe 大小的可互動範圍。以 100% 縮放（560×820 容器）為基準，
+  // cards/*.html 的 .stage（padding:60px 22px 26px）+ .card（--card-w:
+  // clamp(272px, min(86vw,58vh), 372px)，在 560×820 這個容器尺寸下永遠會卡到
+  // 上限 372px）、aspect-ratio:100/140，算出來的卡片本體是 372×520.8，位於
+  // 容器內 left:94px, top:60px（所有現有卡片都是同一套數字，已核對 cards/
+  // 目錄下每一個檔案）。縮放比例不是 100% 時，main.js 是用 CSS
+  // transform:scale() 疊在整個 .stage 上（見 C:\cat\main.js 的 CARD_SCALE_CSS
+  // 說明），不受卡片本體那個 272~372px clamp 上下限的限制，是真的等比例縮放
+  // 整張卡片畫面——這裡的預覽用同一個比例對這四個基準值（W/H/LEFT/TOP）做
+  // 等比例縮放，呈現的結果會跟實際掛件的視覺大小一致。
+  let cardScale = 1; // 100%，見 updateCardScale()
+  let CARD_OUTER_W = 560, CARD_OUTER_H = 820;
+  let REAL_CARD_W = 372, REAL_CARD_H = REAL_CARD_W * 1.4;
+  // 卡片本體在 560×820 格位裡的位置（實測自真實外殼，見 桌面掛件說明.md〈網格座標系統〉）：
+  //   左＝(560-372)/2＝94；上＝ .stage 在格位裡垂直置中後的頂端 ＋ 它的上邊距 60px。
+  //   .stage 高 ＝ 60（上邊距）＋ 520.8（卡）＋ 14（間距）＋ 32（提示文字折成 2 行）＋ 26（下邊距）＝ 652.8，
+  //   置中 → 頂端 (820-652.8)/2 ＝ 83.6，所以卡片頂端 ＝ 83.6＋60 ＝ 143.6。
+  //   ⚠️ 以前這裡寫 60（當成 .stage 貼齊格位頂端），預覽把卡片畫得比真實位置高 84px，看起來像是預設座標讓
+  //   上排卡片大幅凸出螢幕。提示文字如果改成 1 行（或字型不同折行不同），這個值會差幾 px。
+  let REAL_CARD_LEFT = 94, REAL_CARD_TOP = 143.6;
+  const STAGE_PREVIEW_MAX_W = 640;
+
+  // 「🔍 卡片整體縮放比例」欄位改變時，重新算這四個基準值並重畫兩處預覽（多卡
+  // 格位、單卡開機位置）。這裡用最單純的線性等比例縮放（四個基準值都乘上同一
+  // 個 cardScale）——跟 C:\cat\main.js 實際做的事（鎖死 --card-w 在原始
+  // 372px、再對整個 .stage 疊 transform:scale()）不是逐像素完全相同的算法
+  // （真正的 .stage 版面置中還牽涉到 .stage 自己的 hint 文字寬度等細節，這裡
+  // 沒有真的載入卡片 html 去量），但這個預覽本來就是「大概看一下比例對不對」
+  // 的簡化示意圖，不是逐像素還原，線性縮放已經足以正確反映「容器多大、卡片
+  // 佔容器多少比例」這個使用者真正在意的關係。
+  function updateCardScale() {
+    const percent = Number(document.getElementById('cardScalePercent').value) || 100;
+    cardScale = Math.max(0.01, percent / 100);
+    CARD_OUTER_W = Math.round(560 * cardScale);
+    CARD_OUTER_H = Math.round(820 * cardScale);
+    REAL_CARD_W = 372 * cardScale;
+    REAL_CARD_H = REAL_CARD_W * 1.4;
+    REAL_CARD_LEFT = 94 * cardScale;
+    REAL_CARD_TOP = 143.6 * cardScale;
+    renderStagePreview();
+    renderSingleStagePreview();
+  }
+  document.getElementById('cardScalePercent').addEventListener('input', updateCardScale);
+  let slotPreviewEls = []; // renderStagePreview() 畫出來的 .mini-slot-box 參照（不是卡片本體，是外層可互動範圍），索引對應 slots[]
+  let previewScale = 1, previewMinX = 0, previewMinY = 0;
+  let cyclePreviewRunning = false;
+  let cyclePreviewRAF = null;
+  let cyclePreviewStartTs = null;
+  let screenSize = null; // 單卡模式座標挑選器/預覽用，見 init() 的 bg.getScreenSize()
+  let gesturePreviewRAF = null; // 手勢散開/收縮模擬動畫用，見下面〈手勢散開（布）／收縮（拳頭）動畫預覽〉
+
+  function fmtSize(bytes) {
+    if (bytes > 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+    return Math.round(bytes / 1024) + ' KB';
+  }
+
+  function currentMode() {
+    return document.querySelector('input[name=mode]:checked').value;
+  }
+
+  // 跟 main.js 的網格公式一致（5 欄一列，pitch 379.75/532，起點 -89/-130，見
+  // 起點 y 原本是 -153（卡片頂端剛好貼齊螢幕上緣，那時提示文字只有 1 行）；提示文字折成 2 行後卡片往上移了
+  // 約 9px，上排凸出螢幕上緣 10px、整塊偏上。改成 -130：兩排卡片本體（各 520.8 高、列距 532）合起來 1053.6，
+  // 在 1080 高的螢幕上下各留約 13.6px，剛好置中。（欄的起點 -89/欄距 379.75 沒問題，不用動。）
+  // build/ten-card-grid.yml〈網格座標系統〉，都是以 100%／cardScale=1 時的
+  // 560×820 容器大小為基準手調出來的間距）——這裡重複一份純粹是給「新增
+  // 格位」「全部重新排成網格」這兩個按鈕在畫面上即時算出預覽座標用，main.js
+  // 本身已經不需要算這個了（saveBuild() 直接收這裡送過去的 x/y，見該函式開頭
+  // 的說明），兩邊只是剛好用同一組數字，不是互相依賴。
+  // ⚠️ 這幾個常數（起點、欄距）都要乘上目前的 cardScale 才會用——不然「🔍 卡片
+  // 整體縮放比例」放大到 100% 以上時，容器（CARD_OUTER_W/H）變大了但欄距沒跟著
+  // 變大，排出來的格位會互相重疊；縮小同理會留下不必要的大片空隙。跟
+  // CARD_OUTER_W/H 用同一個 cardScale 等比例縮放，維持「整體縮放比例改變、
+  // 排版比例不跑掉」的一致性。
+  const GRID_COLS = 5, BASE_GRID_PITCH_X = 379.75, BASE_GRID_PITCH_Y = 532, BASE_GRID_START_X = -89, BASE_GRID_START_Y = -130;
+  function autoGridPosition(index) {
+    const col = index % GRID_COLS, row = Math.floor(index / GRID_COLS);
+    return {
+      x: Math.round(BASE_GRID_START_X * cardScale + col * BASE_GRID_PITCH_X * cardScale),
+      y: Math.round(BASE_GRID_START_Y * cardScale + row * BASE_GRID_PITCH_Y * cardScale),
+    };
+  }
+
+  // 6 卡版面（上三下三）：中間欄固定在 10 卡網格的中央欄 x=671，左右欄跟中間欄
+  // 的欄距用 10 卡欄距（379.75）的 1.5 倍（≈569.6px）——比 10 卡「緊貼不重疊」
+  // 的間距寬一點，但不到「跳過中間欄、直接沿用左右端點」那麼空（原本 2 倍欄距
+  // 的版本間隙太大，見使用者反饋）。列距（上排/下排的 y）跟 10 卡完全一樣。
+  // ⭐ 「排成 6 卡」的預設座標＝使用者親手調到最滿意的「六狗」設定（build/card-ehai.yml，2026-09-20），
+  // 以 100%（cardScale=1）的 560×820 格位為基準，直接寫死這六組數字（不再用公式算）：
+  //   上排 y=-136、下排 y=396（列距 532）；x=101／671／1241（欄距 570）。
+  // 系統匣選單的「重設卡片位置」本來就是回到打包時 yml 裡的座標，所以打包這份 yml 後，兩邊會是同一組。
+  // 縮放比例不是 100% 時，整組座標依 cardScale 等比例縮放（跟其他版面一致）。
+  const SIX_CARD_BASE = [
+    { x: 101, y: -136 }, { x: 671, y: -136 }, { x: 1241, y: -136 },
+    { x: 101, y: 396 }, { x: 671, y: 396 }, { x: 1241, y: 396 },
+  ];
+  const SIX_COLS = 3, BASE_SIX_CENTER_X = 671, BASE_SIX_PITCH_X = 570, BASE_SIX_START_Y = -136;
+  function sixCardPosition(index) {
+    if (index >= 0 && index < SIX_CARD_BASE.length) {
+      return { x: Math.round(SIX_CARD_BASE[index].x * cardScale), y: Math.round(SIX_CARD_BASE[index].y * cardScale) };
+    }
+    // 超過 6 格（正常不會發生，「排成 6 卡」永遠剛好 6 格）：沿用同樣的欄距／列距往下排
+    const col = index % SIX_COLS, row = Math.floor(index / SIX_COLS);
+    return {
+      x: Math.round(BASE_SIX_CENTER_X * cardScale + (col - 1) * BASE_SIX_PITCH_X * cardScale),
+      y: Math.round(BASE_SIX_START_Y * cardScale + row * BASE_GRID_PITCH_Y * cardScale),
+    };
+  }
+
+  // 10 卡版面（上五下五）：跟 6 卡同一套邏輯——中間欄固定在 x=671、上排 y=-136／下排 y=396（列距 532）、
+  // 上下兩排逐欄左右對齊。差別只在欄距：6 卡用 570（3 欄），10 卡要 5 欄，欄距 570 會排出 2900px 寬、超出 1920 的螢幕，
+  // 所以用 380（5 欄：x = -89／291／671／1051／1431，卡片本體左右緣 5～1897px，剛好排進 1920 寬，卡片之間貼齊不重疊）。
+  // 以 100%（cardScale=1）的 560×820 格位為基準；縮放比例不是 100% 時整組座標等比例縮放。
+  const TEN_COLS = 5, BASE_TEN_CENTER_X = 671, BASE_TEN_PITCH_X = 380, BASE_TEN_TOP_Y = -136, BASE_TEN_BOTTOM_Y = 396;
+  function tenCardPosition(index) {
+    const col = index % TEN_COLS, row = Math.floor(index / TEN_COLS);
+    return {
+      x: Math.round((BASE_TEN_CENTER_X + (col - 2) * BASE_TEN_PITCH_X) * cardScale),
+      y: Math.round((row === 0 ? BASE_TEN_TOP_Y : BASE_TEN_BOTTOM_Y + (row - 1) * BASE_GRID_PITCH_Y) * cardScale),
+    };
+  }
+
+  // 5 卡版面（中央＋四角）：四個角＝6 卡版面的四個角（x=101／1241、y=-136／396），第 1 張在兩排正中間（x=671、y=130：
+  // 卡片本體在格位頂端＋404，所以 y=130 的卡片中心剛好落在上下兩排卡片中心的中點）。順序：中央、左上、右上、右下、左下（順時針）。
+  // 時鐘式循環（F8）在剛好 5 張時只讓 4 個角落的卡繞著第 1 張轉（main.js 的 computeCycleConfigCentre()）。
+  const FIVE_CARD_BASE = [{ x: 671, y: 130 }, { x: 101, y: -136 }, { x: 1241, y: -136 }, { x: 1241, y: 396 }, { x: 101, y: 396 }];
+  function fiveCardPosition(index) {
+    const b = FIVE_CARD_BASE[Math.min(index, FIVE_CARD_BASE.length - 1)];
+    return { x: Math.round(b.x * cardScale), y: Math.round(b.y * cardScale) };
+  }
+
+  // 單卡模式：單選（radio）清單，挑這個 build 唯一要顯示的 html。
+  // overrideChecked：明確指定哪個檔名要打勾（給「重新整理卡片清單」用，重新讀
+  // cards/ 後要保留使用者目前選的那張，不是落回這個 build 原本存檔的值）。不傳
+  // （undefined）就照 editingFilename 對應的既有設定去算；傳 null 代表都不選。
+  function renderCardPickList(overrideChecked) {
+    const box = document.getElementById('cardPickList');
+    if (!cards.length) {
+      box.innerHTML = '<div class="empty-hint">cards/ 資料夾裡沒有任何 .html 檔案</div>';
+      return;
+    }
+    box.innerHTML = '';
+    let checkedFile = overrideChecked;
+    if (checkedFile === undefined) {
+      const editTarget = editingFilename ? builds.find((b) => b.filename === editingFilename) : null;
+      checkedFile = editTarget && editTarget.mode === 'single' ? (editTarget.selected[0]?.file || null) : null;
+    }
+
+    cards.forEach(({ file, sizeBytes }) => {
+      const row = document.createElement('label');
+      row.className = 'card-pick';
+      const rb = document.createElement('input');
+      rb.type = 'radio'; rb.name = 'singleCard'; rb.value = file; rb.checked = file === checkedFile;
+      rb.addEventListener('change', renderSingleStagePreview); // 換卡片時開機位置預覽的檔名標籤要跟著換
+      const name = document.createElement('span');
+      name.className = 'fname'; name.textContent = file;
+      const size = document.createElement('span');
+      size.className = 'fsize'; size.textContent = fmtSize(sizeBytes);
+      row.appendChild(rb); row.appendChild(name); row.appendChild(size);
+      box.appendChild(row);
+    });
+    renderSingleStagePreview();
+  }
+
+  // 多卡模式：格位編輯器，每一列＝一格，直接指定「這一格放哪張卡、在哪個座標」。
+  // 從 cards[]（狀態，不是 DOM）畫出來，所以隨時重畫都不會弄丟使用者輸入——跟
+  // 舊版靠 DOM 勾選狀態不一樣，這裡的下拉選單/<input> 只是 slots[] 的畫面呈現。
+  function renderSlotEditor() {
+    const box = document.getElementById('slotList');
+    slotRowRefs = [];
+    if (!slots.length) {
+      box.innerHTML = '<div class="empty-hint">還沒有任何格位，按下面「➕ 新增格位」開始加。</div>';
+      refreshStagePreview();
+      return;
+    }
+    box.innerHTML = '';
+    const knownFiles = new Set(cards.map((c) => c.file));
+    slots.forEach((slot, i) => {
+      const row = document.createElement('div');
+      row.className = 'slot-row';
+
+      const idx = document.createElement('span');
+      idx.className = 'slot-idx'; idx.textContent = '#' + (i + 1);
+
+      // 這裡刻意不用原生 <select>：Electron 的原生下拉選單彈出清單在這個視窗
+      // 裡會不定期整個點不開（踩到的是 Chromium 這類彈出層依賴視窗
+      // 焦點/置頂狀態才會正常顯示的老毛病，開過幾次「🎯 座標挑選器」子視窗之後
+      // 特別容易發生，之前用 focusable:false 처理過一次，還是會再中招）。改成
+      // 純粹自己刻的按鈕＋清單（見下面 CSS 的 .custom-select），完全不依賴
+      // Electron/Chromium 那層原生彈出層，不管視窗焦點狀態如何都保證點得開。
+      const missing = !knownFiles.has(slot.file);
+      const dropdownWrap = document.createElement('div');
+      dropdownWrap.className = 'custom-select';
+      const trigger = document.createElement('button');
+      trigger.type = 'button';
+      trigger.className = 'custom-select__trigger' + (missing ? ' missing' : '');
+      const triggerLabel = document.createElement('span');
+      triggerLabel.textContent = missing ? `⚠️ ${slot.file}（找不到這個檔案）` : (slot.file || '（選擇卡片）');
+      const chev = document.createElement('span');
+      chev.className = 'chev'; chev.textContent = '▾';
+      trigger.appendChild(triggerLabel); trigger.appendChild(chev);
+      const menu = document.createElement('div');
+      menu.className = 'custom-select__menu';
+      if (missing) {
+        // 這格記的檔名在 cards/ 資料夾裡已經找不到了（被刪掉/改名過）——保留
+        // 原本記的檔名當一個「找不到」的選項，不要悄悄幫使用者換成別的卡，讓
+        // 使用者自己決定要修正還是移除這格。
+        const missingOpt = document.createElement('div');
+        missingOpt.className = 'custom-select__option missing-file active';
+        missingOpt.textContent = `⚠️ ${slot.file}（找不到這個檔案）`;
+        menu.appendChild(missingOpt);
+      }
+      cards.forEach(({ file }) => {
+        const opt = document.createElement('div');
+        opt.className = 'custom-select__option' + (file === slot.file ? ' active' : '');
+        opt.textContent = file;
+        opt.addEventListener('click', (e) => {
+          e.stopPropagation();
+          slots[i].file = file;
+          closeAllCardDropdowns();
+          renderSlotEditor();
+        });
+        menu.appendChild(opt);
+      });
+      trigger.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const wasOpen = menu.classList.contains('open');
+        closeAllCardDropdowns();
+        if (!wasOpen) { menu.classList.add('open'); openCardDropdown = menu; }
+      });
+      dropdownWrap.appendChild(trigger);
+      dropdownWrap.appendChild(menu);
+
+      const xLabel = document.createElement('span'); xLabel.className = 'slot-xy-label'; xLabel.textContent = 'x';
+      const xInput = document.createElement('input');
+      xInput.type = 'number'; xInput.value = slot.x;
+      xInput.addEventListener('input', () => { slots[i].x = Number(xInput.value) || 0; renderStagePreview(); });
+
+      const yLabel = document.createElement('span'); yLabel.className = 'slot-xy-label'; yLabel.textContent = 'y';
+      const yInput = document.createElement('input');
+      yInput.type = 'number'; yInput.value = slot.y;
+      yInput.addEventListener('input', () => { slots[i].y = Number(yInput.value) || 0; renderStagePreview(); });
+
+      const zLabel = document.createElement('span'); zLabel.className = 'slot-xy-label'; zLabel.textContent = '縮放';
+      const zInput = document.createElement('input');
+      zInput.type = 'number'; zInput.min = '25'; zInput.max = '250'; zInput.step = '5'; zInput.style.width = '70px';
+      zInput.value = slot.zoom == null ? 100 : slot.zoom;
+      zInput.title = '這張卡自己的縮放（%），以上面「🔍 卡片整體縮放比例」為 100%。以格位中心縮放，x／y 座標不會因為縮放而移動；100＝跟整體一樣大。桌面掛件裡「重設」會回到這個值。';
+      zInput.addEventListener('input', () => { const v = Number(zInput.value); slots[i].zoom = Number.isFinite(v) && v > 0 ? v : 100; renderStagePreview(); });
+      const zPct = document.createElement('span'); zPct.className = 'slot-xy-label'; zPct.textContent = '%';
+      const pickBtn = document.createElement('button');
+      const isPicking = pickingIndex === i;
+      pickBtn.textContent = isPicking ? '🎯 挑選中…' : '🎯 挑座標';
+      pickBtn.title = '開一個蓋滿螢幕的挑選器視窗，用滑鼠右鍵拖曳一張跟真正卡片一樣大的虛擬卡片來決定座標，比自己猜數字準——放開滑鼠座標會即時同步回這一列的 x/y';
+      pickBtn.disabled = pickingIndex !== null && pickingIndex !== i;
+      pickBtn.addEventListener('click', () => startCoordPicker(i));
+
+      const removeBtn = document.createElement('button');
+      removeBtn.textContent = '🗑️'; removeBtn.title = '移除這格';
+      removeBtn.addEventListener('click', () => {
+        // 刪掉這格之後，後面格位的索引都會往前遞補一位——如果挑選器正開著指向
+        // 這格之後的某一格，索引對應的意義已經變了，直接關掉挑選器比較安全，
+        // 不要讓它繼續拖曳、把座標寫回錯的那一格。實務上這顆按鈕在挑選期間
+        // 已經被 #appRoot 的 inert 遮罩擋住點不到了（見 updatePickerBlockOverlay），
+        // 這裡留著純粹是防禦性寫法，不依賴遮罩一定生效。
+        if (pickingIndex !== null) { pickingIndex = null; bg.closePicker(); updatePickerBlockOverlay(); }
+        slots.splice(i, 1);
+        renderSlotEditor();
+      });
+
+      row.appendChild(idx); row.appendChild(dropdownWrap);
+      row.appendChild(xLabel); row.appendChild(xInput);
+      row.appendChild(yLabel); row.appendChild(yInput);
+      row.appendChild(zLabel); row.appendChild(zInput); row.appendChild(zPct);
+      row.appendChild(pickBtn);
+      row.appendChild(removeBtn);
+      box.appendChild(row);
+      slotRowRefs[i] = { xInput, yInput };
+    });
+    refreshStagePreview();
+  }
+
+  // ========== 座標定義與預覽（stage preview） ==========
+  // 每一格畫成跟真正卡片外框容器同大小比例（560×820，見上面 CARD_OUTER_W/H）
+  // 的縮小示意卡，套用跟卡片本體一樣的金屬金框＋深色卡面配色（見各張
+  // cards/*.html 的 .card__frame／.card__inner），讓使用者不用真的開挑選器、
+  // 光看這個面板就能大致判斷排版對不對，跟現有卡片設計的外觀/比例一致。
+  // 縮放比例／畫面大小是從目前所有格位的座標範圍（bounding box）動態算出來，
+  // 所以不管是 10 卡網格、6 卡版面還是使用者自己亂排的座標，都會自動置中、
+  // 縮到剛好塞進面板寬度，不用另外設定。
+  // 跟 C:\cat\main.js 的 computeGestureLayout() 同一套公式：N 張卡剛好等距圍成
+  // 一圈、邊緣彼此不重疊的最小外接圓半徑，乘 1.15 留一點間隙；只有 1 張卡（或
+  // 0 張）時是 0。手勢散開的圓心／收縮點就是 computeBaseBounds() 算出來的
+  // bounding box 中心，跟 main.js 用同一個中心點，預覽才會跟實際掛件的效果
+  // 一致，不是另外憑空挑一個預覽用的位置。
+  function gestureCircleRadius(n) {
+    return n > 1 ? (CARD_OUTER_W / (2 * Math.sin(Math.PI / n))) * 1.15 : 0;
+  }
+
+  function computeBaseBounds() {
+    // 每一格用「縮放後」的實際矩形（以格位中心縮放，中心不變）
+    const rects = slots.map((s, i) => {
+      const z = slotZoom(i);
+      return { l: (Number(s.x) || 0) + CARD_OUTER_W * (1 - z) / 2, t: (Number(s.y) || 0) + CARD_OUTER_H * (1 - z) / 2, w: CARD_OUTER_W * z, h: CARD_OUTER_H * z };
+    });
+    const minX = Math.min(...rects.map((r) => r.l));
+    const minY = Math.min(...rects.map((r) => r.t));
+    const maxX = Math.max(...rects.map((r) => r.l + r.w));
+    const maxY = Math.max(...rects.map((r) => r.t + r.h));
+    return { minX, minY, maxX, maxY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+  }
+
+  // 面板容器大小除了原始格位範圍，也要把「散開成圓」可能需要的範圍算進去
+  // （不管目前是不是正在播放散開預覽都一樣先留好空間）——不然容器一開始按
+  // 原始網格算出來的大小可能比圓形排列小，播放散開動畫時卡片會被
+  // .stage-preview 的 overflow:hidden 裁掉。圓的半徑用同一個中心點對稱往外
+  // 量，所以套用 padding 後整體中心點不會跑掉，仍然可以直接拿去當手勢的圓心
+  // /收縮點使用。
+  function computeStageBounds() {
+    const base = computeBaseBounds();
+    let { minX, minY, maxX, maxY } = base;
+    const r = gestureCircleRadius(slots.length);
+    if (r > 0) {
+      minX = Math.min(minX, base.cx - r - CARD_OUTER_W / 2);
+      maxX = Math.max(maxX, base.cx + r + CARD_OUTER_W / 2);
+      minY = Math.min(minY, base.cy - r - CARD_OUTER_H / 2);
+      maxY = Math.max(maxY, base.cy + r + CARD_OUTER_H / 2);
+    }
+    // 把螢幕範圍（0,0 到工作區寬高）也算進 bounding box：main.js 的多卡合一
+    // 視窗蓋滿整個螢幕、格位座標是相對螢幕左上角的絕對像素，格位排到螢幕外
+    // （例如 ten-card-grid 最左欄 x=-89 就有一小塊跑到螢幕外）跟螢幕本身比
+    // 格位範圍大很多，這兩種情況都要讓螢幕邊界線完整落在預覽畫面裡，不會被
+    // 裁掉看不到（見 renderStagePreview() 畫的 .screen-boundary）。
+    if (screenSize) {
+      minX = Math.min(minX, 0);
+      minY = Math.min(minY, 0);
+      maxX = Math.max(maxX, screenSize.width);
+      maxY = Math.max(maxY, screenSize.height);
+    }
+    return { minX, minY, spanX: maxX - minX, spanY: maxY - minY };
+  }
+
+  // 畫「螢幕實際邊界」疊加線，多卡格位預覽跟單卡開機位置預覽共用：offsetX/Y
+  // 是預覽畫布左上角對應到的絕對座標（多卡是 computeStageBounds() 算出來的
+  // minX/minY；單卡因為畫布本身就是整個螢幕，永遠是 0,0），螢幕邊界線本身
+  // 永遠畫在絕對座標 (0,0) 到 (screenSize.width, screenSize.height)。
+  function buildScreenBoundaryEl(scale, offsetX, offsetY) {
+    const el = document.createElement('div');
+    el.className = 'screen-boundary';
+    el.style.left = Math.round((0 - offsetX) * scale) + 'px';
+    el.style.top = Math.round((0 - offsetY) * scale) + 'px';
+    el.style.width = Math.round(screenSize.width * scale) + 'px';
+    el.style.height = Math.round(screenSize.height * scale) + 'px';
+    el.innerHTML = '<span class="screen-boundary__label">🖥️ 螢幕邊界</span>';
+    return el;
+  }
+
+  // 畫一格「卡片容器」的預覽視覺：外層 .mini-slot-box 是 main.js 實際拿來當
+  // 視窗/iframe 大小的可互動範圍（560×820，虛線標示，純資訊性，本身不代表
+  // 卡片的視覺邊界），裡面依實際卡片 CSS 算出來的位置/大小（見上面
+  // REAL_CARD_* 常數）疊一張縮小版的金框卡片——單卡模式的開機位置預覽跟多卡
+  // 模式的格位預覽共用這個函式，確保兩處呈現的卡片比例完全一致。
+  // idxLabel 傳空字串就不顯示格位編號（單卡模式只有一張卡，不需要編號）。
+  function buildCardSlotVisual(scale, idxLabel, fileLabel, zoom) {
+    // zoom＝這張卡自己的縮放（1＝跟整體一樣大）：容器與卡片一起縮放（以格位中心縮放的位置補償由呼叫端處理）
+    const z = zoom > 0 ? zoom : 1;
+    const k = scale * z;
+    const outer = document.createElement('div');
+    outer.className = 'mini-slot-box';
+    outer.style.width = (CARD_OUTER_W * k) + 'px';
+    outer.style.height = (CARD_OUTER_H * k) + 'px';
+    // 跟真正卡片一樣的透視（.stage perspective:1300px、origin 50% 42%，隨整體縮放），翻面／旋轉預覽才有立體感
+    outer.style.perspective = Math.round(1300 * cardScale * k) + 'px';
+    outer.style.perspectiveOrigin = '50% 42%';
+
+    const card = document.createElement('div');
+    card.className = 'mini-card';
+    card.style.left = (REAL_CARD_LEFT * k) + 'px';
+    card.style.top = (REAL_CARD_TOP * k) + 'px';
+    card.style.width = (REAL_CARD_W * k) + 'px';
+    card.style.height = (REAL_CARD_H * k) + 'px';
+    card.style.borderRadius = Math.max(2, Math.round(20 * k)) + 'px';
+
+    const inset = Math.max(1, Math.round(6 * k)); // 對應真正卡片的 --frame:6px 金屬外框厚度
+    const innerRadius = Math.max(2, Math.round(14 * k)) + 'px';
+    const inner = document.createElement('div');
+    inner.className = 'mini-card__inner';
+    inner.style.left = inset + 'px'; inner.style.top = inset + 'px';
+    inner.style.right = inset + 'px'; inner.style.bottom = inset + 'px';
+    inner.style.borderRadius = innerRadius;
+    const idxFontSize = Math.max(8, Math.round(12 * k));
+    const fileFontSize = Math.max(6, Math.round(9 * k));
+    inner.innerHTML = (idxLabel ? `<div class="mini-card__idx" style="font-size:${idxFontSize}px">${idxLabel}</div>` : '')
+      + `<div class="mini-card__file" style="font-size:${fileFontSize}px">${fileLabel}</div>`;
+
+    const back = document.createElement('div');
+    back.className = 'mini-card__back';
+    back.style.left = inset + 'px'; back.style.top = inset + 'px';
+    back.style.right = inset + 'px'; back.style.bottom = inset + 'px';
+    back.style.borderRadius = innerRadius;
+    back.innerHTML = `<div class="mini-card__glyph" style="font-size:${Math.max(10, Math.round(34 * k))}px">✦</div>`;
+
+    card.appendChild(inner);
+    card.appendChild(back);
+    outer.appendChild(card);
+    return outer;
+  }
+
+  function renderStagePreview() {
+    const wrap = document.getElementById('stagePreviewWrap');
+    const box = document.getElementById('stagePreview');
+    if (currentMode() !== 'multi' || !slots.length) {
+      wrap.style.display = 'none';
+      slotPreviewEls = [];
+      return;
+    }
+    wrap.style.display = '';
+    const { minX, minY, spanX, spanY } = computeStageBounds();
+    previewScale = spanX > 0 ? Math.min(1, STAGE_PREVIEW_MAX_W / spanX) : 1;
+    previewMinX = minX; previewMinY = minY;
+    box.style.width = Math.round(spanX * previewScale) + 'px';
+    box.style.height = Math.round(spanY * previewScale) + 'px';
+
+    box.innerHTML = '';
+    // 螢幕邊界線先畫（墊在最底層），卡片格位疊在上面，才不會蓋住卡片。
+    if (screenSize) box.appendChild(buildScreenBoundaryEl(previewScale, minX, minY));
+    slotPreviewEls = slots.map((s, i) => {
+      const z = slotZoom(i);
+      const el = buildCardSlotVisual(previewScale, '#' + (i + 1), s.file || '(未指定)', z);
+      // yml 的 x,y 是 zoom=1 時的格位左上角；縮放以格位中心為準，所以左上角補償半個差（跟桌面掛件 defaultSlotFor() 同一個算法）
+      el.style.left = ((Number(s.x) || 0) + CARD_OUTER_W * (1 - z) / 2 - minX) * previewScale + 'px';
+      el.style.top = ((Number(s.y) || 0) + CARD_OUTER_H * (1 - z) / 2 - minY) * previewScale + 'px';
+      box.appendChild(el);
+      return el;
+    });
+  }
+
+  // 跟 C:\cat\main.js 的 computeCycleConfig() 同一套算法（六卡順時針循環的橢圓
+  // 參數），複製一份純粹是給這裡的動畫預覽即時算用，main.js 本身不需要知道
+  // 這個 GUI 的存在，兩邊只是剛好用同一組公式。
+  // 3 張以上、不是剛好 6 張：跟 main.js 的 computeCycleConfigAny() 同一套（依目前位置換算鐘面角度→排序→平均分配 360/N）
+  function computeCycleConfigAnyPreview(cardsArr) {
+    const n = cardsArr.length;
+    const centers = cardsArr.map((c) => ({ cx: c.x + CARD_OUTER_W / 2, cy: c.y + CARD_OUTER_H / 2 }));
+    const xs = centers.map((c) => c.cx);
+    const ys = centers.map((c) => c.cy);
+    const minR = 150 * cardScale;
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const rx = Math.max((Math.max(...xs) - Math.min(...xs)) / 2, minR);
+    const ry = Math.max((Math.max(...ys) - Math.min(...ys)) / 2, minR);
+    const ang = centers.map((c) => (((Math.atan2((c.cx - cx) / rx, -(c.cy - cy) / ry) * 180) / Math.PI) + 360) % 360);
+    const order = ang.map((_, i) => i).sort((a, b) => ang[a] - ang[b]);
+    const offsets = new Array(n);
+    order.forEach((idx, k) => { offsets[idx] = (ang[order[0]] + (k * 360) / n) % 360; });
+    return { cx, cy, rx, ry, offsets };
+  }
+
+  // 剛好 5 張＝「中央＋四角」：跟 main.js 的 computeCycleConfigCentre() 同一套（第 1 張固定當圓心，其餘四張每隔 90° 繞它）
+  function computeCycleConfigCentrePreview(cardsArr) {
+    const centers = cardsArr.map((c) => ({ cx: c.x + CARD_OUTER_W / 2, cy: c.y + CARD_OUTER_H / 2 }));
+    const c0 = centers[0];
+    const others = centers.slice(1);
+    const avg = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
+    const minR = 150 * cardScale;
+    const rx = Math.max(avg(others.map((c) => Math.abs(c.cx - c0.cx))), minR);
+    const ry = Math.max(avg(others.map((c) => Math.abs(c.cy - c0.cy))), minR);
+    const ang = others.map((c) => (((Math.atan2((c.cx - c0.cx) / rx, -(c.cy - c0.cy) / ry) * 180) / Math.PI) + 360) % 360);
+    const order = ang.map((_, i) => i).sort((a, b) => ang[a] - ang[b]);
+    const offsets = new Array(cardsArr.length).fill(null);
+    order.forEach((idx, k) => { offsets[idx + 1] = (ang[order[0]] + (k * 360) / others.length) % 360; });
+    return { cx: c0.cx, cy: c0.cy, rx, ry, offsets, fixed: true };
+  }
+
+  function computeCycleConfigPreview(cardsArr) {
+    if (cardsArr.length < 3) return null;
+    if (cardsArr.length === 5) return computeCycleConfigCentrePreview(cardsArr);
+    if (cardsArr.length !== 6) return computeCycleConfigAnyPreview(cardsArr);
+    const centers = cardsArr.map((c) => ({ cx: c.x + CARD_OUTER_W / 2, cy: c.y + CARD_OUTER_H / 2 }));
+    const order = centers.map((_, i) => i).sort((a, b) => centers[a].cy - centers[b].cy);
+    const topIdx = order.slice(0, 3).sort((a, b) => centers[a].cx - centers[b].cx);
+    const bottomIdx = order.slice(3).sort((a, b) => centers[a].cx - centers[b].cx);
+    const TOP_ANGLES = [300, 0, 60];
+    const BOTTOM_ANGLES = [240, 180, 120];
+    const offsets = new Array(6);
+    topIdx.forEach((idx, rank) => { offsets[idx] = TOP_ANGLES[rank]; });
+    bottomIdx.forEach((idx, rank) => { offsets[idx] = BOTTOM_ANGLES[rank]; });
+    const xs = centers.map((c) => c.cx);
+    const topYs = topIdx.map((i) => centers[i].cy);
+    const bottomYs = bottomIdx.map((i) => centers[i].cy);
+    const avg = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const rx = (Math.max(...xs) - Math.min(...xs)) / 2;
+    const topY = avg(topYs);
+    const bottomY = avg(bottomYs);
+    const cy = (topY + bottomY) / 2;
+    const ry = (bottomY - topY) / 2;
+    return { cx, cy, rx, ry, offsets };
+  }
+
+  function applyCyclePreviewPositions(cfg, angleDeg) {
+    for (let i = 0; i < slotPreviewEls.length; i++) {
+      const fixedCard = cfg.offsets[i] === null; // 固定不動的卡（5 卡版面的中央那張）
+      const thetaRad = fixedCard ? 0 : (cfg.offsets[i] + angleDeg) * Math.PI / 180;
+      const leftReal = cfg.cx + (fixedCard ? 0 : cfg.rx * Math.sin(thetaRad)) - CARD_OUTER_W * slotZoom(i) / 2;
+      const topReal = cfg.cy - (fixedCard ? 0 : cfg.ry * Math.cos(thetaRad)) - CARD_OUTER_H * slotZoom(i) / 2;
+      const el = slotPreviewEls[i];
+      if (!el) continue;
+      if (cfg.fixed) el.style.zIndex = fixedCard ? 1 : (Math.cos(thetaRad) < 0 ? 2 : 0); // 前後遮擋：繞到下半部蓋在中央卡前面，上半部躲到後面
+      el.style.left = (leftReal - previewMinX) * previewScale + 'px';
+      el.style.top = (topReal - previewMinY) * previewScale + 'px';
+    }
+  }
+
+  // 每一幀都重新從 slots[] 現算橢圓參數（不是開始播放時算一次存起來）：這樣
+  // 使用者一邊看著動畫預覽、一邊調整座標或轉速輸入框時，畫面會立刻反映最新的
+  // 值，不用先暫停再重新播放。
+  function cyclePreviewFrame(ts) {
+    if (!cyclePreviewRunning) return;
+    if (cyclePreviewStartTs === null) cyclePreviewStartTs = ts;
+    const cardsArr = slots.map((s) => ({ x: Number(s.x) || 0, y: Number(s.y) || 0 }));
+    const cfg = computeCycleConfigPreview(cardsArr);
+    if (cfg) {
+      const periodSec = Math.max(1, Number(document.getElementById('cyclePeriodSeconds').value) || 10);
+      const angleDeg = (360 * (ts - cyclePreviewStartTs) / (periodSec * 1000)) % 360;
+      applyCyclePreviewPositions(cfg, angleDeg);
+    }
+    cyclePreviewRAF = requestAnimationFrame(cyclePreviewFrame);
+  }
+
+  function startCyclePreviewAnim() {
+    if (cyclePreviewRunning || slots.length < 3) return;
+    cyclePreviewRunning = true;
+    cyclePreviewStartTs = null;
+    cyclePreviewRAF = requestAnimationFrame(cyclePreviewFrame);
+  }
+
+  function stopCyclePreviewAnim() {
+    cyclePreviewRunning = false;
+    if (cyclePreviewRAF) cancelAnimationFrame(cyclePreviewRAF);
+    cyclePreviewRAF = null;
+    document.getElementById('cyclePreviewToggle').checked = false;
+    renderStagePreview(); // 停止後畫面退回目前格位的靜態座標
+  }
+
+  // 播放開關只有「多卡模式、3 格以上」才能用——main.js 的 CYCLE_MODE 就是
+  // 這樣判斷要不要啟用時鐘式循環（見 C:\cat\main.js），格數不對時桌面掛件本身
+  // 也不會轉，這裡停用開關並提示原因，避免使用者以為「預覽不會動＝功能壞了」。
+  function updateCyclePreviewControlsState() {
+    const toggle = document.getElementById('cyclePreviewToggle');
+    const hint = document.getElementById('cyclePreviewHint');
+    const eligible = currentMode() === 'multi' && slots.length >= 3;
+    toggle.disabled = !eligible;
+    if (!eligible) {
+      toggle.checked = false;
+      if (cyclePreviewRunning) stopCyclePreviewAnim();
+      hint.textContent = currentMode() === 'multi'
+        ? `目前 ${slots.length} 格，要 3 格以上才會啟用時鐘式循環（也才能播放這裡的動畫預覽）`
+        : '';
+    } else {
+      hint.textContent = '';
+    }
+  }
+
+  function refreshStagePreview() {
+    renderStagePreview();
+    updateCyclePreviewControlsState();
+    updateGesturePreviewControlsState();
+    renderShortcutHint();
+    if (gesturePreviewRAF) { cancelAnimationFrame(gesturePreviewRAF); gesturePreviewRAF = null; }
+  }
+
+  document.getElementById('cyclePreviewToggle').addEventListener('change', (e) => {
+    if (e.target.checked) {
+      stopGestureAutoPreview(); // 兩種動畫預覽不同時播放，避免互搶同一批 DOM 節點
+      startCyclePreviewAnim();
+    } else {
+      stopCyclePreviewAnim();
+    }
+  });
+
+  // ========== 翻面／旋轉一圈 動畫預覽 ==========
+  // 只是讓使用者在打包前就能看到「卡片翻面」「卡片旋轉一圈」動起來的樣子（不用先打包再開 exe 才知道），
+  // 跟真正的掛件用同一套時間與緩動：
+  //   翻面：每 1 秒翻 180°（掛件裡按 F4 開始／暫停「每秒自動翻面循環」，卡片本身是 setInterval(flip, 1000)），
+  //         每一格翻面用 flipCur += (flipTgt - flipCur) × 0.13 的逐格緩動（依經過時間換算成不受螢幕更新率影響）。
+  //   旋轉：匯出分享錄的「旋轉一圈」——3 秒一圈、緩入緩出 deg = 360×(t − sin(2πt)/2π)、上下搖擺 ±7°，轉完停 0.8 秒再轉。
+  // 作用在目前畫面上所有預覽卡（多卡的座標預覽或單卡的開機位置預覽）；同一時間只播一種；預覽消失就自動停。
+  function slotZoom(i) {
+    const v = Number(slots[i] && slots[i].zoom);
+    return Math.max(0.25, Math.min(2.5, (Number.isFinite(v) && v > 0 ? v : 100) / 100));
+  }
+  let animMode = null;
+  let animRAF = null;
+  let animStart = 0;
+  let animLastTs = 0;
+  let flipCur = 0, flipTgt = 0, flipTickAt = 0;
+  const FLIP_INTERVAL_MS = 1000;   // 跟卡片的 AUTO_FLIP_MS 一樣
+  const SPIN_SECONDS = 3;          // 跟匯出分享的預設 exportSeconds 一樣
+  const SPIN_PAUSE_SECONDS = 0.8;
+  function animTargets() {
+    return Array.prototype.slice.call(document.querySelectorAll('#stagePreview .mini-card, #singleStagePreview .mini-card'));
+  }
+  function updateAnimHints() {
+    const key = (document.getElementById('autoFlipKey').value.trim() || 'F4');
+    const text = animMode === 'flip' ? `每 ${FLIP_INTERVAL_MS / 1000} 秒翻面一次（掛件裡按 ${key} 開始／暫停，所有卡片都支援）`
+      : animMode === 'spin' ? `${SPIN_SECONDS} 秒轉一圈（緩入緩出，跟「匯出分享」錄下來的旋轉一樣），轉完停 ${SPIN_PAUSE_SECONDS} 秒再轉`
+      : '';
+    document.querySelectorAll('.animHint').forEach((el) => { el.textContent = text; });
+  }
+  function animFrame(ts) {
+    if (!animMode) return;
+    const els = animTargets();
+    if (!els.length) { setAnimMode(null); return; } // 預覽不見了（切換模式等）就自動停
+    let ry = 0, rx = 0;
+    if (animMode === 'flip') {
+      if (!animStart) { animStart = ts; animLastTs = ts; flipTickAt = ts; flipCur = 0; flipTgt = 0; }
+      if (ts - flipTickAt >= FLIP_INTERVAL_MS) { flipTickAt += FLIP_INTERVAL_MS * Math.floor((ts - flipTickAt) / FLIP_INTERVAL_MS); flipTgt += 180; }
+      const dt = Math.min(64, ts - animLastTs); animLastTs = ts;
+      const d = flipTgt - flipCur;
+      flipCur = Math.abs(d) < 0.05 ? flipTgt : flipCur + d * (1 - Math.pow(1 - 0.13, dt / 16.67));
+      const wraps = Math.floor(Math.min(flipCur, flipTgt) / 360);
+      if (wraps > 0) { flipCur -= 360 * wraps; flipTgt -= 360 * wraps; }
+      ry = flipCur;
+    } else {
+      if (!animStart) animStart = ts;
+      const t = ((ts - animStart) / 1000) % (SPIN_SECONDS + SPIN_PAUSE_SECONDS);
+      if (t < SPIN_SECONDS) {
+        const e = t / SPIN_SECONDS;
+        ry = 360 * (e - Math.sin(2 * Math.PI * e) / (2 * Math.PI));
+        rx = 7 * Math.sin(2 * Math.PI * e);
+      }
+    }
+    const tf = `rotateX(${rx.toFixed(2)}deg) rotateY(${ry.toFixed(2)}deg)`;
+    els.forEach((el) => { el.style.transform = tf; });
+    animRAF = requestAnimationFrame(animFrame);
+  }
+  function setAnimMode(mode) {
+    animMode = mode;
+    animStart = 0;
+    if (animRAF) cancelAnimationFrame(animRAF);
+    animRAF = null;
+    document.querySelectorAll('.animFlipToggle').forEach((c) => { c.checked = mode === 'flip'; });
+    document.querySelectorAll('.animSpinToggle').forEach((c) => { c.checked = mode === 'spin'; });
+    updateAnimHints();
+    if (mode) animRAF = requestAnimationFrame(animFrame);
+    else animTargets().forEach((el) => { el.style.transform = ''; });
+  }
+  document.querySelectorAll('.animFlipToggle').forEach((c) => c.addEventListener('change', (e) => setAnimMode(e.target.checked ? 'flip' : null)));
+  document.querySelectorAll('.animSpinToggle').forEach((c) => c.addEventListener('change', (e) => setAnimMode(e.target.checked ? 'spin' : null)));
+
+  // ========== 手勢散開（布）／收縮（拳頭）動畫預覽 ==========
+  // 這個 GUI 沒有接攝影機/MediaPipe（那是真正桌面掛件裡的事，見 C:\cat\main.js
+  // 的〈手勢散開/收縮〉），這裡只是讓使用者不用實際比手勢就能看到「調成這個
+  // 過渡秒數，散開/收縮的速度感覺如何」——跟 main.js 用同一套圓形/收縮公式跟
+  // 同一個 easeOutCubic 緩動，秒數調完存檔後，真正掛件的手感會跟這裡預覽的
+  // 一致。
+  function gestureTargetsFor(mode) {
+    const n = slots.length;
+    const base = computeBaseBounds();
+    if (mode === 'paper') {
+      const r = gestureCircleRadius(n);
+      return Array.from({ length: n }, (_, i) => {
+        const theta = (i * 360 / n) * Math.PI / 180;
+        return { x: base.cx + r * Math.sin(theta) - CARD_OUTER_W * slotZoom(i) / 2, y: base.cy - r * Math.cos(theta) - CARD_OUTER_H * slotZoom(i) / 2 };
+      });
+    }
+    if (mode === 'fist') {
+      return new Array(n).fill(0).map((_, i) => ({ x: base.cx - CARD_OUTER_W * slotZoom(i) / 2, y: base.cy - CARD_OUTER_H * slotZoom(i) / 2 }));
+    }
+    return slots.map((s, i) => ({ x: (Number(s.x) || 0) + CARD_OUTER_W * (1 - slotZoom(i)) / 2, y: (Number(s.y) || 0) + CARD_OUTER_H * (1 - slotZoom(i)) / 2 })); // 'reset'：回到目前設定的原始位置（含各格自己的縮放補償）
+  }
+
+  function runGesturePreview(mode) {
+    if (!slots.length || !slotPreviewEls.length) return;
+    stopCyclePreviewAnim(); // 時鐘循環跟手勢預覽不同時播放，避免互搶同一批 DOM 節點
+    if (gesturePreviewRAF) cancelAnimationFrame(gesturePreviewRAF);
+    const targets = gestureTargetsFor(mode);
+    const from = slotPreviewEls.map((el) => ({
+      x: (parseFloat(el.style.left) || 0) / previewScale + previewMinX,
+      y: (parseFloat(el.style.top) || 0) / previewScale + previewMinY,
+    }));
+    const durationMs = Math.max(0.05, Number(document.getElementById('gestureTransitionSeconds').value) || 3) * 1000;
+    const startTs = performance.now();
+    function frame(ts) {
+      const t = Math.min(1, (ts - startTs) / durationMs);
+      const e = 1 - Math.pow(1 - t, 3); // easeOutCubic，跟 main.js 同一條曲線
+      for (let i = 0; i < slotPreviewEls.length; i++) {
+        const fx = from[i].x + (targets[i].x - from[i].x) * e;
+        const fy = from[i].y + (targets[i].y - from[i].y) * e;
+        slotPreviewEls[i].style.left = (fx - previewMinX) * previewScale + 'px';
+        slotPreviewEls[i].style.top = (fy - previewMinY) * previewScale + 'px';
+      }
+      if (t < 1) gesturePreviewRAF = requestAnimationFrame(frame);
+    }
+    gesturePreviewRAF = requestAnimationFrame(frame);
+  }
+
+  document.getElementById('btnPreviewPaper').addEventListener('click', () => { stopGestureAutoPreview(); runGesturePreview('paper'); });
+  document.getElementById('btnPreviewFist').addEventListener('click', () => { stopGestureAutoPreview(); runGesturePreview('fist'); });
+  document.getElementById('btnPreviewGestureReset').addEventListener('click', () => { stopGestureAutoPreview(); runGesturePreview('reset'); });
+
+  // 「▶️ 播放動畫預覽」：跟六卡循環的動畫預覽同一種體驗——不用一直手動點
+  // 「模擬散開/模擬收縮」，勾選後自動散開→停留一下→收縮→停留一下，不斷循環，
+  // 讓使用者不用動手就能看到調整過渡秒數之後的手感如何。
+  let gestureAutoPreviewRunning = false;
+  let gestureAutoPreviewTimer = null;
+  let gestureAutoPreviewMode = 'paper';
+  const GESTURE_PREVIEW_HOLD_MS = 550; // 散開/收縮完停留多久再切下一個動作，讓使用者看清楚定格畫面
+
+  function startGestureAutoPreview() {
+    if (gestureAutoPreviewRunning || !slots.length) return;
+    gestureAutoPreviewRunning = true;
+    gestureAutoPreviewMode = 'paper';
+    (function step() {
+      if (!gestureAutoPreviewRunning) return;
+      runGesturePreview(gestureAutoPreviewMode);
+      const durationMs = Math.max(0.05, Number(document.getElementById('gestureTransitionSeconds').value) || 3) * 1000;
+      gestureAutoPreviewTimer = setTimeout(() => {
+        gestureAutoPreviewMode = gestureAutoPreviewMode === 'paper' ? 'fist' : 'paper';
+        step();
+      }, durationMs + GESTURE_PREVIEW_HOLD_MS);
+    })();
+  }
+
+  function stopGestureAutoPreview() {
+    gestureAutoPreviewRunning = false;
+    clearTimeout(gestureAutoPreviewTimer);
+    gestureAutoPreviewTimer = null;
+    document.getElementById('gesturePreviewToggle').checked = false;
+  }
+
+  function updateGesturePreviewControlsState() {
+    const toggle = document.getElementById('gesturePreviewToggle');
+    const hint = document.getElementById('gesturePreviewHint');
+    const eligible = currentMode() === 'multi' && slots.length > 0;
+    toggle.disabled = !eligible;
+    if (!eligible) {
+      if (gestureAutoPreviewRunning) stopGestureAutoPreview();
+      hint.textContent = currentMode() === 'multi' ? '（至少要有一個格位才能預覽）' : '';
+    } else {
+      hint.textContent = '';
+    }
+  }
+
+  document.getElementById('gesturePreviewToggle').addEventListener('change', (e) => {
+    if (e.target.checked) {
+      stopCyclePreviewAnim(); // 兩種動畫預覽不同時播放，避免互搶同一批 DOM 節點
+      startGestureAutoPreview();
+    } else {
+      stopGestureAutoPreview();
+    }
+  });
+
+  // 開座標挑選器（虛擬卡片視窗）調整第 i 格的座標，見 main.js openCoordPicker()
+  // 跟 picker.html 的說明。同一時間只允許挑一格，避免兩個挑選器互搶同一個
+  // picker 視窗、搞不清楚拖曳結果要回寫到哪一格。
+  async function startCoordPicker(i) {
+    if (pickingIndex !== null) return;
+    pickingIndex = i;
+    renderSlotEditor();
+    updatePickerBlockOverlay();
+    // w/h 明確帶目前的 CARD_OUTER_W/H（會依「🔍 卡片整體縮放比例」變動）——
+    // 不傳的話 main.js 的 openCoordPicker() 預設值是 560/820，縮放比例不是
+    // 100% 時挑選器畫出來的虛擬卡片方框大小會跟實際格位大小對不起來。
+    await bg.openCoordPicker({ index: i, x: slots[i].x, y: slots[i].y, file: slots[i].file, w: CARD_OUTER_W, h: CARD_OUTER_H });
+  }
+
+  // ========== 單卡模式：座標挑選器／開機位置預覽 ==========
+  // main.js 的 createSingleWindow() 開機時用
+  //   x = round((sw-CARD_OUTER_W)/2) + offsetX
+  //   y = round((sh-CARD_OUTER_H)/2) + offsetY
+  // （sw/sh 是螢幕工作區大小）算出實際視窗位置——這裡的挑選器/預覽要用同一條
+  // 公式做雙向換算，選出來的座標才會跟卡片實際顯示的位置對得起來。
+  function singleCenterOffset() {
+    if (!screenSize) return { x: 0, y: 0 };
+    return {
+      x: Math.round((screenSize.width - CARD_OUTER_W) / 2),
+      y: Math.round((screenSize.height - CARD_OUTER_H) / 2),
+    };
+  }
+
+  function currentSingleAbsolute() {
+    const c = singleCenterOffset();
+    const ox = Number(document.getElementById('offsetX').value) || 0;
+    const oy = Number(document.getElementById('offsetY').value) || 0;
+    return { x: c.x + ox, y: c.y + oy };
+  }
+
+  function renderSingleStagePreview() {
+    const wrap = document.getElementById('singleStagePreviewWrap');
+    const box = document.getElementById('singleStagePreview');
+    if (currentMode() !== 'single' || !screenSize) { wrap.style.display = 'none'; return; }
+    wrap.style.display = '';
+    const scale = Math.min(1, STAGE_PREVIEW_MAX_W / screenSize.width);
+    box.style.width = Math.round(screenSize.width * scale) + 'px';
+    box.style.height = Math.round(screenSize.height * scale) + 'px';
+    box.innerHTML = '';
+    // 這個預覽畫布本身就是整個螢幕（畫布左上角＝螢幕絕對座標 0,0），螢幕邊界
+    // 線先畫在最底層，卡片疊在上面。
+    box.appendChild(buildScreenBoundaryEl(scale, 0, 0));
+    const abs = currentSingleAbsolute();
+    const checked = document.querySelector('input[name=singleCard]:checked');
+    const el = buildCardSlotVisual(scale, '', checked ? checked.value : '(未選卡片)');
+    el.style.left = Math.round(abs.x * scale) + 'px';
+    el.style.top = Math.round(abs.y * scale) + 'px';
+    box.appendChild(el);
+  }
+
+  function updateSingleCoordButtonState() {
+    const btn = document.getElementById('btnPickSingleCoord');
+    const picking = pickingIndex === 'single';
+    btn.textContent = picking ? '🎯 挑選中…' : '🎯 挑座標';
+    btn.disabled = pickingIndex !== null && pickingIndex !== 'single';
+  }
+
+  async function startSingleCoordPicker() {
+    if (pickingIndex !== null) return;
+    if (!screenSize) screenSize = await bg.getScreenSize();
+    pickingIndex = 'single';
+    updateSingleCoordButtonState();
+    updatePickerBlockOverlay();
+    const abs = currentSingleAbsolute();
+    const checked = document.querySelector('input[name=singleCard]:checked');
+    await bg.openCoordPicker({ index: 'single', x: abs.x, y: abs.y, file: checked ? checked.value : '', w: CARD_OUTER_W, h: CARD_OUTER_H });
+  }
+
+  document.getElementById('btnPickSingleCoord').addEventListener('click', startSingleCoordPicker);
+  document.getElementById('offsetX').addEventListener('input', renderSingleStagePreview);
+  document.getElementById('offsetY').addEventListener('input', renderSingleStagePreview);
+
+  // 挑選器拖曳中即時回報座標：直接改對應 input 的畫面值＋slots[] 狀態，不整個
+  // 重畫格位編輯器（重畫會在拖曳中造成不必要的 DOM 抖動）。index 是字串
+  // 'single' 代表這是單卡模式的開機位置挑選器（見 startSingleCoordPicker()），
+  // 不是多卡模式的格位索引。
+  bg.onPickerMove(({ index, x, y }) => {
+    if (index === 'single') {
+      const c = singleCenterOffset();
+      document.getElementById('offsetX').value = x - c.x;
+      document.getElementById('offsetY').value = y - c.y;
+      renderSingleStagePreview();
+      return;
+    }
+    if (!slots[index]) return;
+    slots[index].x = x;
+    slots[index].y = y;
+    const refs = slotRowRefs[index];
+    if (refs) { refs.xInput.value = x; refs.yInput.value = y; }
+    renderStagePreview();
+  });
+
+  // 挑選器視窗關閉（按了「完成」或直接關掉）：解除挑選狀態，讓其他列的
+  // 「🎯 挑座標」按鈕（含單卡模式那顆）恢復可按，同時解除整頁遮罩——這是
+  // 唯一真正解除操作限制的地方（對應「視窗關閉與儲存座標位置後才讓使用者做
+  // 其他操作」的要求），picker.html 拖曳當下已經即時把座標寫回 slots/offsetX/
+  // offsetY（見上面 bg.onPickerMove），所以這裡的視窗關閉事件觸發時，座標
+  // 本來就已經是最新值，不用另外做「儲存」這個動作。兩邊的重畫/更新函式都是
+  // 冪等的（只在對應模式下才真的顯示東西），不用判斷關掉的是哪一種挑選器。
+  bg.onPickerClosed(() => {
+    pickingIndex = null;
+    renderSlotEditor();
+    updateSingleCoordButtonState();
+    renderSingleStagePreview();
+    updatePickerBlockOverlay();
+  });
+
+  // 勾選清單裡的檔名（跨重畫保留選取狀態，例如打包完成重畫列表時不會弄丟
+  // 使用者已經勾好的選取）——批次刪除、批次打包共用同一份選取狀態，跟檔案
+  // 總管「先勾選幾個項目、再選要做什麼操作」是同一種操作邏輯，不需要為兩種
+  // 操作分開兩套勾選框。
+  let selectedFilenames = new Set();
+
+  function renderBuildList() {
+    const box = document.getElementById('buildList');
+    // 重畫前先把清單裡已經不存在的檔名清掉（例如上一輪刪除後留下的殘留選取）。
+    const knownFilenames = new Set(builds.map((b) => b.filename));
+    selectedFilenames.forEach((f) => { if (!knownFilenames.has(f)) selectedFilenames.delete(f); });
+
+    if (!builds.length) {
+      box.innerHTML = '<div class="empty-hint">build/ 底下還沒有任何設定檔</div>';
+      return;
+    }
+    box.innerHTML = '';
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'batch-toolbar';
+    const selectAllLabel = document.createElement('label');
+    selectAllLabel.className = 'inline-chk';
+    const selectAllChk = document.createElement('input');
+    selectAllChk.type = 'checkbox';
+    selectAllChk.checked = builds.length > 0 && builds.every((b) => selectedFilenames.has(b.filename));
+    selectAllChk.addEventListener('change', () => {
+      selectedFilenames = selectAllChk.checked ? new Set(builds.map((b) => b.filename)) : new Set();
+      renderBuildList();
+    });
+    selectAllLabel.appendChild(selectAllChk);
+    selectAllLabel.appendChild(document.createTextNode('全選'));
+    const batchDeleteBtn = document.createElement('button');
+    batchDeleteBtn.className = 'danger';
+    batchDeleteBtn.textContent = `🗑️ 批次刪除（已選 ${selectedFilenames.size} 筆）`;
+    batchDeleteBtn.disabled = selectedFilenames.size === 0 || !!packagingFilename;
+    batchDeleteBtn.addEventListener('click', confirmBatchDelete);
+    const batchPackageBtn = document.createElement('button');
+    batchPackageBtn.className = 'primary';
+    if (batchPackagingActive) {
+      batchPackageBtn.textContent = `⏹️ 取消批次打包（剩餘 ${batchQueueRemaining} 筆排隊中）`;
+      batchPackageBtn.disabled = false;
+      // 跟打包 log 區塊裡的「✖️ 取消打包」按鈕做完全一樣的事（見
+      // requestCancelCurrentPackaging()）：不是只擋住排隊中的下一份，連目前
+      // 正在跑的這一份都會一起砍掉，這裡只是把工具列上的按鈕也接到同一支
+      // 函式，讓使用者不用捲到打包 log 區塊也能按到取消。
+      batchPackageBtn.addEventListener('click', () => { batchPackageBtn.disabled = true; requestCancelCurrentPackaging(true); });
+    } else {
+      batchPackageBtn.textContent = `📦 批次打包（已選 ${selectedFilenames.size} 筆）`;
+      batchPackageBtn.disabled = selectedFilenames.size === 0 || !!packagingFilename;
+      batchPackageBtn.addEventListener('click', startBatchPackaging);
+    }
+    toolbar.appendChild(selectAllLabel);
+    toolbar.appendChild(batchDeleteBtn);
+    toolbar.appendChild(batchPackageBtn);
+    box.appendChild(toolbar);
+
+    builds.forEach((b) => {
+      const row = document.createElement('div');
+      row.className = 'build-row';
+      const isEditing = editingFilename === b.filename && !b.error;
+      if (isEditing) row.classList.add('editing');
+
+      const rowChk = document.createElement('input');
+      rowChk.type = 'checkbox';
+      rowChk.className = 'row-check';
+      rowChk.checked = selectedFilenames.has(b.filename);
+      rowChk.disabled = packagingFilename === b.filename;
+      rowChk.addEventListener('change', () => {
+        if (rowChk.checked) selectedFilenames.add(b.filename); else selectedFilenames.delete(b.filename);
+        renderBuildList();
+      });
+      row.appendChild(rowChk);
+
+      if (b.error) {
+        const errMain = document.createElement('div');
+        errMain.className = 'build-main';
+        errMain.innerHTML = `<div class="build-name">${b.filename}</div><div class="build-detail">${b.error}</div>`;
+        row.appendChild(errMain);
+        row.appendChild(Object.assign(document.createElement('span'), { className: 'badge err', textContent: '解析失敗' }));
+        const deleteBtnErr = document.createElement('button');
+        deleteBtnErr.textContent = '🗑️ 刪除';
+        deleteBtnErr.disabled = !!packagingFilename;
+        deleteBtnErr.addEventListener('click', () => confirmDeleteBuild(b));
+        row.appendChild(deleteBtnErr);
+        box.appendChild(row);
+        return;
+      }
+      const counts = {};
+      b.selected.forEach((s) => { counts[s.file] = (counts[s.file] || 0) + 1; });
+      const fileList = Object.entries(counts).map(([f, n]) => n > 1 ? `${f} ×${n}` : f).join('、') || '（無）';
+      const main = document.createElement('div');
+      main.className = 'build-main';
+      const offsetText = b.mode === 'single' && b.defaultOffset && (b.defaultOffset.x !== 0 || b.defaultOffset.y !== 0)
+        ? ` · 開機位置偏移 (${b.defaultOffset.x}, ${b.defaultOffset.y})` : '';
+      main.innerHTML = `<div class="build-name">${b.productName || '(未命名)'} <span style="color:var(--text2);font-weight:400;">— ${b.filename}</span></div>
+        <div class="build-detail">${fileList}${b.mode === 'single' && b.toggleKey ? ` · ${b.toggleKey}` : ''}${offsetText}</div>`;
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.textContent = packagingFilename === b.filename ? '打包中…' : (b.mode === 'multi' ? '多卡' : '單卡');
+      if (packagingFilename === b.filename) badge.classList.add('packaging');
+      const editBtn = document.createElement('button');
+      editBtn.textContent = '編輯';
+      editBtn.className = 'row-btn';
+      editBtn.disabled = !!packagingFilename;
+      editBtn.addEventListener('click', () => loadForEdit(b));
+      const packageBtn = document.createElement('button');
+      packageBtn.textContent = '📦 打包成 exe';
+      packageBtn.className = 'row-btn';
+      packageBtn.disabled = !!packagingFilename;
+      packageBtn.addEventListener('click', () => startPackaging(b.filename, b.productName));
+      const deleteBtn = document.createElement('button');
+      deleteBtn.textContent = '🗑️ 刪除';
+      deleteBtn.className = 'row-btn';
+      deleteBtn.disabled = !!packagingFilename;
+      deleteBtn.addEventListener('click', () => confirmDeleteBuild(b));
+      row.appendChild(main);
+      if (isEditing) {
+        const editingBadge = document.createElement('span');
+        editingBadge.className = 'badge editing row-editing-badge';
+        editingBadge.textContent = '✏️ 編輯中';
+        row.appendChild(editingBadge);
+      }
+      row.appendChild(badge); row.appendChild(editBtn); row.appendChild(packageBtn); row.appendChild(deleteBtn);
+      box.appendChild(row);
+    });
+  }
+
+  // 批次刪除確認：列出全部要刪的 productName，一次問一次（不是每筆問一次），
+  // 確認後照順序一筆一筆呼叫既有的單筆刪除 IPC（main.js deleteBuild()，本來就
+  // 會先備份到 build/.bak/ 才真的刪檔），有任何一筆失敗就停下來並回報，已經
+  // 刪掉的不會復原（都還在 .bak/ 裡救得回來）。正在編輯或正在打包中的那份如果
+  // 被選到，分別會清空表單／被 checkbox 的 disabled 擋掉不會選到。
+  async function confirmBatchDelete() {
+    const targets = builds.filter((b) => selectedFilenames.has(b.filename));
+    if (!targets.length) return;
+    const list = targets.map((b) => b.productName ? `「${b.productName}」（${b.filename}）` : b.filename).join('\n');
+    const ok = window.confirm(`確定要刪除以下 ${targets.length} 份設定嗎？\n\n${list}\n\n刪除前會自動備份到 build/.bak/，救得回來，但這些設定會從清單跟系統匣選單消失。`);
+    if (!ok) return;
+    for (const b of targets) {
+      const result = await bg.deleteBuild(b.filename);
+      if (!result.ok) {
+        window.alert(`刪除「${b.productName || b.filename}」失敗：${result.error}\n\n已經刪除的不會復原，其餘尚未處理的這次就先停下來，可以再選一次剩下的重試。`);
+        break;
+      }
+      selectedFilenames.delete(b.filename);
+      if (editingFilename === b.filename) resetForm();
+    }
+    await refreshBuilds();
+  }
+
+  // 一鍵打包：同一時間只允許一個（見 main.js packageBuild() 的說明），按下去就
+  // 把整份清單的編輯/打包按鈕都停用，避免使用者在跑到一半時又點別的設定。
+  let packagingFilename = null;
+  // 批次打包狀態：main.js 的 electron-builder 本來就只允許一次跑一份（共用
+  // dist/ 輸出資料夾跟全域工具鏈快取，見 packageBuild() 的說明），批次打包不是
+  // 真的並行，而是照選取順序排隊、一份一份跑，跟使用者自己排隊點好幾次
+  // 「📦 打包成 exe」效果一樣，只是不用每份跑完都自己再點下一份。
+  let batchPackagingActive = false;
+  let batchQueueRemaining = 0;
+  let batchCancelRequested = false; // 使用者按「取消批次打包」——擋住「還沒開始」的下一份不會再排隊；正在跑的那一份是靠 requestCancelCurrentPackaging() 另外呼叫 bg.cancelPackage() 真的砍掉，不是靠這個旗標
+
+  async function startPackaging(filename, productName) {
+    packagingFilename = filename;
+    renderBuildList();
+
+    const logBox = document.getElementById('packageLogBox');
+    const logTitle = document.getElementById('packageLogTitle');
+    const logPre = document.getElementById('packageLog');
+    const msg = document.getElementById('packageMsg');
+    const revealBtn = document.getElementById('btnRevealExe');
+    const cancelBtn = document.getElementById('btnCancelPackaging');
+    logBox.style.display = '';
+    logTitle.textContent = `📦 正在打包：${productName || filename}（build/${filename}）`;
+    logPre.textContent = '';
+    msg.className = 'msg'; msg.textContent = '執行 electron-builder 中，第一次執行如果要下載工具鏈可能要一段時間…';
+    revealBtn.style.display = 'none';
+    armCancelButton(false);
+    logBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+    const result = await bg.packageBuild(filename);
+
+    packagingFilename = null;
+    renderBuildList();
+    cancelBtn.style.display = 'none';
+
+    const packLabel = `${productName || filename}（build/${filename}）`;
+    if (result.cancelled) {
+      logTitle.textContent = `⏹️ 已取消打包：${packLabel}`;
+      msg.className = 'msg err'; msg.textContent = '⏹️ 已取消打包';
+    } else if (result.ok) {
+      logTitle.textContent = `✅ 打包完成：${packLabel}`;
+      msg.className = 'msg ok'; msg.textContent = '✅ 打包完成';
+      if (result.exePath) {
+        revealBtn.style.display = '';
+        revealBtn.onclick = () => bg.revealFile(result.exePath);
+      }
+    } else {
+      logTitle.textContent = `❌ 打包失敗：${packLabel}`;
+      msg.className = 'msg err'; msg.textContent = '❌ ' + result.error;
+    }
+  }
+
+  // 打包中途取消：單筆、批次共用同一顆「✖️ 取消打包」按鈕跟同一支
+  // bg.cancelPackage()（main.js 那邊只認得「目前正在跑的那個」，不用分辨是
+  // 誰發起的），這裡只是統一負責顯示／停用按鈕，實際結果一樣是靠
+  // packageBuild() 那個 promise 用 result.cancelled 回報，不是這裡自己決定
+  // 「取消成功了」。onBatchCancelExtra 是批次流程額外要做的事（設
+  // batchCancelRequested、停止排隊）——單筆流程不用，傳 undefined 就好。
+  // 實際發出取消請求：isBatch 是 true 的話，除了砍掉目前正在跑的這一份，也把
+  // batchCancelRequested 設起來，讓批次迴圈不會再排下一份（見
+  // startBatchPackaging()）。單筆打包（isBatch 是 false/undefined）就只是
+  // 單純砍掉那一份。這支函式同時給「打包 log 區塊裡的✖️取消打包」按鈕跟
+  // 「工具列上的⏹️取消批次打包」按鈕呼叫，統一走同一條路。
+  async function requestCancelCurrentPackaging(isBatch) {
+    if (isBatch) batchCancelRequested = true;
+    const cancelBtn = document.getElementById('btnCancelPackaging');
+    cancelBtn.disabled = true;
+    cancelBtn.textContent = '取消中…';
+    const result = await bg.cancelPackage();
+    if (!result.ok) {
+      // 這個 race 視窗很小（打包剛好在這個瞬間自然結束、cancelPackage() 找不
+      // 到目標）——不是真正的錯誤，安靜恢復按鈕就好，不用跳警告框，
+      // packageBuild() 的 promise 本來就會照正常流程回報最終結果。
+      cancelBtn.disabled = false;
+      cancelBtn.textContent = '✖️ 取消打包';
+    }
+  }
+
+  // 顯示/重設打包 log 區塊裡的「✖️ 取消打包」按鈕——單筆、批次流程開始時都要
+  // 呼叫一次，讓按鈕回到「可以點」的狀態（不管上一輪打包是正常結束還是被
+  // 取消過，這裡都要重新可用）。isBatch 決定按下去要不要一起擋住排隊中的下
+  // 一份（見 requestCancelCurrentPackaging()）。
+  function armCancelButton(isBatch) {
+    const cancelBtn = document.getElementById('btnCancelPackaging');
+    cancelBtn.style.display = '';
+    cancelBtn.disabled = false;
+    cancelBtn.textContent = '✖️ 取消打包';
+    cancelBtn.onclick = () => requestCancelCurrentPackaging(isBatch);
+  }
+
+  window.builderGui.onPackageLog(({ filename, text }) => {
+    if (filename !== packagingFilename) return;
+    const logPre = document.getElementById('packageLog');
+    logPre.textContent += text;
+    logPre.scrollTop = logPre.scrollHeight;
+  });
+
+  // 批次打包：對照 confirmBatchDelete() 一次問一次確認就開始執行不同，這裡故意
+  // 不特別跳確認框——打包是非破壞性動作（原始設定檔完全不會被動到，最壞情況
+  // 就是浪費幾分鐘重跑一次），不像刪除那樣需要一次性的「確定要做」把關。跟
+  // 單筆打包（startPackaging()）共用同一組 packageLogBox／packagingFilename
+  // 狀態，讓既有的「打包中要停用其他列的編輯/刪除/打包按鈕」邏輯自動套用到
+  // 批次進行中的每一份，不用另外寫一套。失敗不會讓整批停下來——每一份都是
+  // 獨立設定，一份設定本身的問題（例如白名單漏了某個檔案）不該連累排在後面、
+  // 完全沒問題的其他份，跑完全部之後才一次列出成功/失敗總表。
+  async function startBatchPackaging() {
+    const targets = builds.filter((b) => selectedFilenames.has(b.filename) && !b.error);
+    const skipped = builds.filter((b) => selectedFilenames.has(b.filename) && b.error);
+    if (!targets.length) {
+      window.alert(skipped.length ? '勾選的設定都解析失敗（YAML 格式有問題），沒有可以打包的項目。' : '沒有勾選任何設定。');
+      return;
+    }
+
+    batchPackagingActive = true;
+    batchCancelRequested = false;
+    batchQueueRemaining = targets.length;
+    renderBuildList();
+
+    const logBox = document.getElementById('packageLogBox');
+    const logTitle = document.getElementById('packageLogTitle');
+    const logPre = document.getElementById('packageLog');
+    const msg = document.getElementById('packageMsg');
+    const revealBtn = document.getElementById('btnRevealExe');
+    const cancelBtn = document.getElementById('btnCancelPackaging');
+    revealBtn.style.display = 'none';
+    logBox.style.display = '';
+    logBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+    const results = []; // [{productName, filename, ok, cancelled?, error?}]
+    for (let i = 0; i < targets.length; i++) {
+      if (batchCancelRequested) break;
+      const b = targets[i];
+      batchQueueRemaining = targets.length - i;
+      packagingFilename = b.filename;
+      renderBuildList();
+      logTitle.textContent = `📦 批次打包中（${i + 1}/${targets.length}）：${b.productName || b.filename}（build/${b.filename}）`;
+      logPre.textContent = '';
+      msg.className = 'msg'; msg.textContent = '執行 electron-builder 中，第一次執行如果要下載工具鏈可能要一段時間…';
+      armCancelButton(true); // 每一份重新開始都要重新可用——上一份如果被取消過，按鈕會停在「取消中…」
+
+      const result = await bg.packageBuild(b.filename);
+      results.push({ productName: b.productName, filename: b.filename, ok: result.ok, cancelled: !!result.cancelled, error: result.error });
+      packagingFilename = null;
+    }
+
+    batchPackagingActive = false;
+    batchQueueRemaining = 0;
+    cancelBtn.style.display = 'none';
+    renderBuildList();
+
+    const okCount = results.filter((r) => r.ok).length;
+    const notStartedCount = targets.length - results.length;
+    const lines = results.map((r) => {
+      if (r.cancelled) return `⏹️ ${r.productName || r.filename}：使用者取消`;
+      return `${r.ok ? '✅' : '❌'} ${r.productName || r.filename}${r.ok ? '' : '：' + r.error}`;
+    });
+    if (notStartedCount > 0) lines.push(`⏹️ 使用者取消，還有 ${notStartedCount} 份沒開始打包`);
+    if (skipped.length) lines.push(`⚠️ 略過 ${skipped.length} 份解析失敗的設定：${skipped.map((b) => b.filename).join('、')}`);
+    logTitle.textContent = `📦 批次打包結束：${okCount}/${targets.length} 成功`;
+    msg.className = 'msg' + (okCount === targets.length && notStartedCount === 0 ? ' ok' : ' err');
+    msg.textContent = lines.join('\n');
+  }
+
+  // 刪除前用原生 confirm() 問一次——C:\cat 沒有 git，刪錯了救不回來（main.js
+  // 的 deleteBuild() 有先備份到 build/.bak/，但那是最後防線，不是拿來取代
+  // 這裡的確認）。正在編輯的那份設定被刪掉的話，表單要跟著清空，不然還停在
+  // 一份已經不存在的設定上，按「儲存」會變成重新建立一份同名的。
+  async function confirmDeleteBuild(b) {
+    const label = b.productName ? `「${b.productName}」（build/${b.filename}）` : `build/${b.filename}`;
+    const ok = window.confirm(`確定要刪除 ${label} 嗎？\n\n刪除前會自動備份到 build/.bak/，救得回來，但這份設定會從清單跟系統匣選單消失。`);
+    if (!ok) return;
+    const result = await bg.deleteBuild(b.filename);
+    if (!result.ok) { window.alert('刪除失敗：' + result.error); return; }
+    if (editingFilename === b.filename) resetForm();
+    await refreshBuilds();
+  }
+
+  function loadForEdit(b) {
+    pickingIndex = null;
+    bg.closePicker();
+    updatePickerBlockOverlay();
+    stopCyclePreviewAnim();
+    stopGestureAutoPreview();
+    if (gesturePreviewRAF) { cancelAnimationFrame(gesturePreviewRAF); gesturePreviewRAF = null; }
+    editingFilename = b.filename;
+    renderBuildList(); // 讓清單上那一列顯示「編輯中」
+    document.getElementById('formTitle').textContent = `編輯：${b.filename}`;
+    document.getElementById('productName').value = b.productName || '';
+    document.querySelector(`input[name=mode][value="${b.mode}"]`).checked = true;
+    document.getElementById('toggleKey').value = b.toggleKey || '';
+    document.getElementById('quitKey').value = b.quitKey || '';
+    document.getElementById('cycleKey').value = b.cycleKey || '';
+    document.getElementById('gestureKey').value = b.gestureKey || '';
+    document.getElementById('skeletonKey').value = b.skeletonKey || '';
+    document.getElementById('resetKey').value = b.resetKey || '';
+    document.getElementById('autoFlipKey').value = b.autoFlipKey || '';
+    document.getElementById('skillKey').value = b.skillKey || '';
+    document.getElementById('rarityKey').value = b.rarityKey || '';
+    document.getElementById('muteKey').value = b.muteKey || '';
+    document.getElementById('zoomInKey').value = b.zoomInKey || '';
+    document.getElementById('zoomOutKey').value = b.zoomOutKey || '';
+    document.getElementById('opacityUpKey').value = b.opacityUpKey || '';
+    document.getElementById('opacityDownKey').value = b.opacityDownKey || '';
+    document.getElementById('exportKey').value = b.exportKey || '';
+    document.getElementById('exportLayoutKey').value = b.exportLayoutKey || '';
+    document.getElementById('exportFormat').value = ['gif', 'png'].includes(b.exportFormat) ? b.exportFormat : 'webm';
+    document.getElementById('gifScale').value = [0.8, 1, 2].includes(Number(b.gifScale)) ? String(Number(b.gifScale)) : '1.5';
+    document.getElementById('offsetX').value = b.defaultOffset?.x ?? 0;
+    document.getElementById('offsetY').value = b.defaultOffset?.y ?? 0;
+    document.getElementById('cyclePeriodSeconds').value = b.cyclePeriodSeconds ?? 10;
+    document.getElementById('gestureTransitionSeconds').value = b.gestureTransitionSeconds ?? 3;
+    document.getElementById('gestureShowSkeleton').checked = b.gestureShowSkeleton !== false;
+    document.getElementById('cardScalePercent').value = Math.round((b.cardScale ?? 1) * 100);
+    document.getElementById('launchAtLogin').checked = b.launchAtLogin === true;
+    document.getElementById('ambientStars').checked = b.ambientStars === true;
+    updateCardScale();
+    // b.selected 對多卡模式來說本來就是「一格一筆、順序對應 cards[]」，直接當
+    // slots 的初始值用，不用再另外推算——這就是格位編輯器的資料直接來源。
+    slots = b.mode === 'multi' ? b.selected.map((s) => ({ file: s.file, x: s.x ?? 0, y: s.y ?? 0, zoom: Math.round((Number(s.zoom) > 0 ? Number(s.zoom) : 1) * 100) })) : [];
+    updateModeVisibility();
+    updateSingleCoordButtonState();
+    renderCardPickList(b.mode === 'single' ? (b.selected[0]?.file || null) : null);
+    renderSlotEditor();
+    setMsg('', '');
+  }
+
+  function resetForm() {
+    pickingIndex = null;
+    bg.closePicker();
+    updatePickerBlockOverlay();
+    stopCyclePreviewAnim();
+    stopGestureAutoPreview();
+    if (gesturePreviewRAF) { cancelAnimationFrame(gesturePreviewRAF); gesturePreviewRAF = null; }
+    editingFilename = null;
+    renderBuildList(); // 清掉清單上的「編輯中」
+    slots = [];
+    document.getElementById('formTitle').textContent = '新增設定';
+    document.getElementById('productName').value = '';
+    document.querySelector('input[name=mode][value="single"]').checked = true;
+    document.getElementById('toggleKey').value = '';
+    document.getElementById('quitKey').value = '';
+    document.getElementById('cycleKey').value = '';
+    document.getElementById('gestureKey').value = '';
+    document.getElementById('skeletonKey').value = '';
+    document.getElementById('resetKey').value = '';
+    document.getElementById('autoFlipKey').value = '';
+    document.getElementById('skillKey').value = '';
+    document.getElementById('rarityKey').value = '';
+    document.getElementById('muteKey').value = '';
+    document.getElementById('zoomInKey').value = '';
+    document.getElementById('zoomOutKey').value = '';
+    document.getElementById('opacityUpKey').value = '';
+    document.getElementById('opacityDownKey').value = '';
+    document.getElementById('exportKey').value = '';
+    document.getElementById('exportLayoutKey').value = '';
+    document.getElementById('exportFormat').value = 'webm';
+    document.getElementById('gifScale').value = '1.5';
+    document.getElementById('offsetX').value = 0;
+    document.getElementById('offsetY').value = 0;
+    document.getElementById('cyclePeriodSeconds').value = 10;
+    document.getElementById('gestureTransitionSeconds').value = 3;
+    document.getElementById('gestureShowSkeleton').checked = true;
+    document.getElementById('cardScalePercent').value = 100;
+    document.getElementById('launchAtLogin').checked = false;
+    document.getElementById('ambientStars').checked = false;
+    updateCardScale();
+    updateModeVisibility();
+    updateSingleCoordButtonState();
+    renderCardPickList(null);
+    renderSlotEditor();
+    setMsg('', '');
+  }
+
+  function updateModeVisibility() {
+    const mode = currentMode();
+    // toggleKey／quitKey 兩種模式都會用到（main.js 不分模式一律註冊這兩個全域
+    // 快捷鍵），只有 offsetRow（單卡的開機預設位置）跟 cycleKey／gestureKey
+    // （多卡合一才有的六卡循環／手勢功能）才需要依模式切換顯示。
+    document.getElementById('offsetLabel').style.display = mode === 'single' ? '' : 'none';
+    document.getElementById('offsetRow').style.display = mode === 'single' ? '' : 'none';
+    document.getElementById('pickLabelSingle').style.display = mode === 'single' ? '' : 'none';
+    document.getElementById('pickLabelMulti').style.display = mode === 'multi' ? '' : 'none';
+    document.getElementById('cardPickList').style.display = mode === 'single' ? '' : 'none';
+    document.getElementById('slotEditor').style.display = mode === 'multi' ? '' : 'none';
+    document.getElementById('cycleKeyLabel').style.display = mode === 'multi' ? '' : 'none';
+    document.getElementById('cycleKey').style.display = mode === 'multi' ? '' : 'none';
+    document.getElementById('exportLayoutKeyLabel').style.display = mode === 'multi' ? '' : 'none';
+    document.getElementById('exportLayoutKey').style.display = mode === 'multi' ? '' : 'none';
+    document.getElementById('gestureKeyLabel').style.display = mode === 'multi' ? '' : 'none';
+    document.getElementById('gestureKey').style.display = mode === 'multi' ? '' : 'none';
+    document.getElementById('skeletonKeyLabel').style.display = mode === 'multi' ? '' : 'none';
+    document.getElementById('skeletonKey').style.display = mode === 'multi' ? '' : 'none';
+    renderShortcutHint();
+    renderSingleStagePreview();
+  }
+
+  // 快捷鍵提示：把目前表單上的按鍵設定（留空就用 main.js 的預設值）整理成一
+  // 眼看懂的清單，直接顯示在設定視窗裡，不用另外去翻 main.js 的註解或
+  // 桌面掛件說明.md 才知道哪個鍵是做什麼的。六卡循環的提示會照目前格位數量
+  // 動態註記「是否 3 格以上才會生效」，跟 main.js 的 CYCLE_MODE 判斷一致。
+  function renderShortcutHint() {
+    const hintEl = document.getElementById('shortcutHint');
+    if (!hintEl) return;
+    const mode = currentMode();
+    const toggleKey = document.getElementById('toggleKey').value.trim() || 'F9';
+    const quitKey = document.getElementById('quitKey').value.trim() || 'F10';
+    const lines = [
+      `<b>${toggleKey}</b>　切換「可互動」／「點擊穿透」`,
+      `<b>${quitKey}</b>　結束程式`,
+    ];
+    if (mode === 'multi') {
+      const cycleKey = document.getElementById('cycleKey').value.trim() || 'F8';
+      const gestureKey = document.getElementById('gestureKey').value.trim() || 'F7';
+      const skeletonKey = document.getElementById('skeletonKey').value.trim() || 'F6';
+      const sixEligible = slots.length >= 3;
+      lines.push(`<b>${cycleKey}</b>　開始/暫停 時鐘式循環${sixEligible ? '' : `（目前 ${slots.length} 格，要 3 格以上才會生效）`}`);
+      if (slots.length === 5) lines.push('　　5 張＝「中央＋四角」：第 1 張固定不動，其餘四張繞著它轉（轉到它下半部會蓋在前面、上半部躲到後面）');
+      lines.push(`<b>${gestureKey}</b>　開始/暫停 手勢辨識：布＝散開、拳頭＝收縮、剪刀＝翻面，第一次按會要求攝影機權限`);
+      lines.push(`<b>${skeletonKey}</b>　開啟/關閉 手部骨架視覺效果`);
+    }
+    const resetKey = document.getElementById('resetKey').value.trim() || 'F11';
+    lines.push(`<b>${resetKey}</b>　重設卡片位置（會先跳確認視窗）`);
+    lines.push('滑鼠右鍵按住卡片拖曳　移動這張卡的位置');
+    const autoFlipKey = document.getElementById('autoFlipKey').value.trim() || 'F4';
+    lines.push(`<b>${autoFlipKey}</b>　開始/暫停 每秒自動翻面循環（預設卡片靜止；所有卡片都支援，也可以從系統匣選單操作）`);
+    const skillKeyV = document.getElementById('skillKey').value.trim() || 'Ctrl+Alt+1';
+    const rarityKeyV = document.getElementById('rarityKey').value.trim() || 'Ctrl+Alt+2';
+    const muteKeyV = document.getElementById('muteKey').value.trim() || 'Ctrl+Alt+3';
+    lines.push(`<b>${skillKeyV}</b>　技能演出（蓄力→爆發：光環、粒子、震動、殘影加倍；點一下卡片也會觸發）`);
+    lines.push(`<b>${rarityKeyV}</b>　切換稀有度 SR→SSR→UR→LR（換邊框金屬感、全息強度、星光密度）`);
+    lines.push(`<b>${muteKeyV}</b>　音效靜音／取消靜音（WebAudio 合成音效：翻面、稀有度、技能）`);
+    const zoomInV = document.getElementById('zoomInKey').value.trim() || 'Ctrl+Alt+=';
+    const zoomOutV = document.getElementById('zoomOutKey').value.trim() || 'Ctrl+Alt+-';
+    const opUpV = document.getElementById('opacityUpKey').value.trim() || 'Ctrl+Alt+]';
+    const opDownV = document.getElementById('opacityDownKey').value.trim() || 'Ctrl+Alt+[';
+    lines.push(`<b>${zoomInV}</b> / <b>${zoomOutV}</b>　放大／縮小卡片（多卡＝全部一起）；游標在卡片上<b>滾輪</b>也能縮放（多卡＝只那一張）`);
+    lines.push(`<b>${opUpV}</b> / <b>${opDownV}</b>　更不透明／更透明；<b>Alt＋滾輪</b>也能調透明度，<b>滑鼠中鍵</b>重設縮放與透明度（設定會跟位置一起存檔，重開機記得住）`);
+    const exportKeyV = document.getElementById('exportKey').value.trim() || 'Ctrl+Alt+4';
+    const exportFmtV = { webm: 'WebM 影片', gif: 'GIF 動圖', png: 'PNG 圖片' }[document.getElementById('exportFormat').value] || 'WebM 影片';
+    lines.push(`<b>${exportKeyV}</b>　匯出分享：把卡片旋轉一圈錄成 ${exportFmtV}（存到「圖片\\幻影卡匯出」，完成會跳通知）；${mode === 'multi' ? '多卡＝先把游標移到要匯出的那張卡上再按；' : ''}系統匣選單「📤 匯出分享」可另選 PNG／WebM／GIF`);
+    if (mode === 'multi') {
+      const layoutKeyV = document.getElementById('exportLayoutKey').value.trim() || 'Ctrl+Alt+5';
+      lines.push(`<b>${layoutKeyV}</b>　匯出整個版面：所有卡一起（用目前的座標與每張卡的縮放）旋轉一圈錄成影片／GIF／PNG；系統匣選單「📤 匯出分享」還有「🕐 時鐘轉圈動畫」（3 張以上）`);
+    }
+    hintEl.innerHTML = lines.map((l) => '• ' + l).join('<br>');
+  }
+
+  ['toggleKey', 'quitKey', 'cycleKey', 'gestureKey', 'skeletonKey', 'resetKey', 'autoFlipKey', 'skillKey', 'rarityKey', 'muteKey', 'zoomInKey', 'zoomOutKey', 'opacityUpKey', 'opacityDownKey', 'exportKey', 'exportFormat', 'exportLayoutKey'].forEach((id) => {
+    document.getElementById(id).addEventListener('input', renderShortcutHint);
+  });
+
+  function setMsg(cls, text) {
+    const el = document.getElementById('formMsg');
+    el.className = 'msg' + (cls ? ' ' + cls : '');
+    el.textContent = text;
+  }
+
+  document.querySelectorAll('input[name=mode]').forEach((r) => r.addEventListener('change', () => {
+    // 正常操作下這個 change 事件不可能在挑選器開著時觸發——模式切換的 radio
+    // 本身在 #appRoot 裡面，挑選期間整個 inert 點不到（見 updatePickerBlockOverlay）
+    // ——這裡的 pickingIndex 重置純粹是防禦性寫法。
+    pickingIndex = null;
+    bg.closePicker();
+    updatePickerBlockOverlay();
+    // 從單卡切到多卡、而且格位還是空的時候，順手把單卡選的那張卡當第一格帶過
+    // 去——單純圖方便銜接，不是必要行為，slots 本來就可以從空清單開始手動加。
+    if (currentMode() === 'multi' && slots.length === 0) {
+      const checked = document.querySelector('input[name=singleCard]:checked');
+      if (checked) slots.push({ file: checked.value, ...autoGridPosition(0) });
+    }
+    updateModeVisibility();
+    updateSingleCoordButtonState();
+    renderSlotEditor();
+  }));
+  document.getElementById('btnNew').addEventListener('click', resetForm);
+
+  document.getElementById('btnAddSlot').addEventListener('click', () => {
+    slots.push({ file: cards[0]?.file || '', ...autoGridPosition(slots.length) });
+    renderSlotEditor();
+  });
+
+  document.getElementById('btnAutoGrid').addEventListener('click', () => {
+    slots.forEach((s, i) => { const p = autoGridPosition(i); s.x = p.x; s.y = p.y; });
+    renderSlotEditor();
+  });
+
+  document.getElementById('btnSixGrid').addEventListener('click', () => {
+    // 補到剛好 6 格：不夠就複製最後一格的卡片（沒有任何格位就用清單第一張），
+    // 超過就裁掉多的，讓「排成 6 卡」這個按鈕的結果永遠剛好是 6 格。
+    while (slots.length < 6) {
+      const fallbackFile = slots[slots.length - 1]?.file || cards[0]?.file || '';
+      slots.push({ file: fallbackFile, x: 0, y: 0 });
+    }
+    slots.length = 6;
+    slots.forEach((s, i) => { const p = sixCardPosition(i); s.x = p.x; s.y = p.y; });
+    renderSlotEditor();
+  });
+
+  document.getElementById('btnFiveGrid').addEventListener('click', () => {
+    // 補到剛好 5 格：新增的格位優先放還沒被用到的卡片（跟「一鍵排成 10 卡」同一規則）；超過 5 格就裁掉多的。
+    const used = new Set(slots.map((sl) => sl.file));
+    const unused = cards.map((c) => c.file).filter((f) => !used.has(f));
+    while (slots.length < 5) {
+      const fallbackFile = slots[slots.length - 1]?.file || cards[0]?.file || '';
+      slots.push({ file: unused.length ? unused.shift() : fallbackFile, x: 0, y: 0 });
+    }
+    slots.length = 5;
+    slots.forEach((sl, i) => { const pos = fiveCardPosition(i); sl.x = pos.x; sl.y = pos.y; });
+    renderSlotEditor();
+  });
+
+  document.getElementById('btnTenGrid').addEventListener('click', () => {
+    // 補到剛好 10 格：新增的格位優先放「還沒被任何格位用到」的卡片（依 cards/ 清單順序），
+    // 沒有未用過的卡片了才重複最後一格的；超過 10 格就裁掉多的。
+    const used = new Set(slots.map((sl) => sl.file));
+    const unused = cards.map((c) => c.file).filter((f) => !used.has(f));
+    while (slots.length < 10) {
+      const fallbackFile = slots[slots.length - 1]?.file || cards[0]?.file || '';
+      slots.push({ file: unused.length ? unused.shift() : fallbackFile, x: 0, y: 0 });
+    }
+    slots.length = 10;
+    slots.forEach((sl, i) => { const pos = tenCardPosition(i); sl.x = pos.x; sl.y = pos.y; });
+    renderSlotEditor();
+  });
+
+  // cards/ 資料夾是在 init() 那次讀的，之後才新增的 html 不會自己冒出來——
+  // 這顆按鈕重新讀一次資料夾。單卡模式保留目前選的那張；多卡模式的 slots[]
+  // 本來就不是從 DOM 讀的，直接重畫下拉選單選項即可，不會弄丟任何一格。
+  document.getElementById('btnRefreshCards').addEventListener('click', async () => {
+    const checkedSingle = document.querySelector('input[name=singleCard]:checked')?.value || null;
+    const btn = document.getElementById('btnRefreshCards');
+    btn.disabled = true;
+    cards = await bg.listCards();
+    btn.disabled = false;
+    renderCardPickList(checkedSingle);
+    renderSlotEditor();
+  });
+
+  document.getElementById('btnSave').addEventListener('click', async () => {
+    const productName = document.getElementById('productName').value;
+    const mode = currentMode();
+    const toggleKey = document.getElementById('toggleKey').value;
+    const quitKey = document.getElementById('quitKey').value;
+    const resetKey = document.getElementById('resetKey').value;
+    const autoFlipKey = document.getElementById('autoFlipKey').value;
+    const payload = { originalFilename: editingFilename, productName, mode, toggleKey, quitKey, resetKey, autoFlipKey };
+    payload.skillKey = document.getElementById('skillKey').value;
+    payload.rarityKey = document.getElementById('rarityKey').value;
+    payload.muteKey = document.getElementById('muteKey').value;
+    payload.zoomInKey = document.getElementById('zoomInKey').value;
+    payload.zoomOutKey = document.getElementById('zoomOutKey').value;
+    payload.opacityUpKey = document.getElementById('opacityUpKey').value;
+    payload.opacityDownKey = document.getElementById('opacityDownKey').value;
+    payload.exportKey = document.getElementById('exportKey').value;
+    payload.exportLayoutKey = document.getElementById('exportLayoutKey').value;
+    payload.exportFormat = document.getElementById('exportFormat').value;
+    payload.gifScale = document.getElementById('gifScale').value;
+    // 卡片整體縮放比例：單卡、多卡都適用，寫在 if/else 外面。
+    payload.cardScale = (Number(document.getElementById('cardScalePercent').value) || 100) / 100;
+    payload.launchAtLogin = document.getElementById('launchAtLogin').checked;
+    payload.ambientStars = document.getElementById('ambientStars').checked;
+    if (mode === 'single') {
+      const checked = document.querySelector('input[name=singleCard]:checked');
+      payload.selectedFiles = checked ? [checked.value] : [];
+      payload.defaultOffset = {
+        x: Number(document.getElementById('offsetX').value) || 0,
+        y: Number(document.getElementById('offsetY').value) || 0,
+      };
+    } else {
+      payload.slots = slots.map((s, i) => ({ file: s.file, x: Number(s.x) || 0, y: Number(s.y) || 0, zoom: slotZoom(i) }));
+      payload.cyclePeriodSeconds = Number(document.getElementById('cyclePeriodSeconds').value) || 10;
+      payload.gestureTransitionSeconds = Number(document.getElementById('gestureTransitionSeconds').value) || 3;
+      payload.cycleKey = document.getElementById('cycleKey').value;
+      payload.gestureKey = document.getElementById('gestureKey').value;
+      payload.skeletonKey = document.getElementById('skeletonKey').value;
+      payload.gestureShowSkeleton = document.getElementById('gestureShowSkeleton').checked;
+    }
+
+    document.getElementById('btnSave').disabled = true;
+    setMsg('', '儲存中...');
+    const result = await bg.saveBuild(payload);
+    document.getElementById('btnSave').disabled = false;
+
+    if (!result.ok) { setMsg('err', '❌ ' + result.error); return; }
+    setMsg('ok', `✅ 已存成 build/${result.filename}`);
+    editingFilename = result.filename;
+    await refreshBuilds();
+  });
+
+  async function refreshBuilds() {
+    builds = await bg.listBuilds();
+    renderBuildList();
+  }
+
+  // ==================== 圖片一鍵生成卡片 ====================
+  const mk = { file: null, path: '', nameAuto: true, running: false, resultPath: '' };
+  const mkEl = (id) => document.getElementById(id);
+  const mkRadio = (name) => document.querySelector(`input[name=${name}]:checked`)?.value || '';
+
+  function mkSetImage(file) {
+    if (!file || !/^image\//.test(file.type || '')) { mkEl('mkMsg').className = 'msg err'; mkEl('mkMsg').textContent = '這不是圖片檔（支援 png / jpg / webp / bmp / gif）。'; return; }
+    mk.file = file;
+    mk.path = bg.getPathForFile(file);
+    const drop = mkEl('mkDrop');
+    drop.classList.add('has-img');
+    drop.style.backgroundImage = `url("${URL.createObjectURL(file)}")`;
+    mkEl('mkFileName').textContent = file.name || '（貼上的圖片）';
+    const nameInput = mkEl('mkName');
+    if (!nameInput.value || mk.nameAuto) {
+      nameInput.value = (file.name || '').replace(/\.[^.]+$/, '').slice(0, 20);
+      mk.nameAuto = true;
+    }
+    mkEl('btnMakeCard').disabled = mk.running;
+    mkEl('mkMsg').className = 'msg'; mkEl('mkMsg').textContent = '';
+  }
+  mkEl('mkName').addEventListener('input', () => { mk.nameAuto = false; });
+
+  const mkDrop = mkEl('mkDrop');
+  mkDrop.addEventListener('click', () => mkEl('mkFile').click());
+  mkDrop.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); mkEl('mkFile').click(); } });
+  mkEl('mkFile').addEventListener('change', (e) => { if (e.target.files[0]) mkSetImage(e.target.files[0]); e.target.value = ''; });
+  mkDrop.addEventListener('dragover', (e) => { e.preventDefault(); mkDrop.classList.add('over'); });
+  mkDrop.addEventListener('dragleave', () => mkDrop.classList.remove('over'));
+  mkDrop.addEventListener('drop', (e) => {
+    e.preventDefault(); e.stopPropagation(); mkDrop.classList.remove('over');
+    if (e.dataTransfer.files[0]) mkSetImage(e.dataTransfer.files[0]);
+  });
+  // 拖到視窗其他地方時，Electron 預設會「導航到那個檔案」把整個管理介面換掉——擋掉。
+  window.addEventListener('dragover', (e) => e.preventDefault());
+  window.addEventListener('drop', (e) => { e.preventDefault(); if (e.dataTransfer.files[0]) mkSetImage(e.dataTransfer.files[0]); });
+  document.addEventListener('paste', (e) => {
+    if (e.target && /^(INPUT|TEXTAREA)$/.test(e.target.tagName)) return;
+    const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith('image/'));
+    if (item) mkSetImage(item.getAsFile());
+  });
+
+  bg.onMakeCardLog((evt) => {
+    if (evt.event === 'stage') { mkEl('mkMsg').className = 'msg'; mkEl('mkMsg').textContent = '⏳ ' + evt.message; }
+    else if (evt.event === 'log') {
+      const pre = mkEl('mkLog'); pre.style.display = 'block';
+      pre.textContent = (pre.textContent + evt.text + '\n').split('\n').slice(-60).join('\n');
+      pre.scrollTop = pre.scrollHeight;
+    }
+  });
+
+  function mkSetRunning(on) {
+    mk.running = on;
+    mkEl('btnMakeCard').disabled = on || !mk.file;
+    mkEl('btnCancelMake').style.display = on ? '' : 'none';
+  }
+
+  mkEl('btnCancelMake').addEventListener('click', () => bg.cancelMakeCard());
+  mkEl('btnMkReveal').addEventListener('click', () => { if (mk.resultPath) bg.revealFile(mk.resultPath); });
+
+  mkEl('btnMakeCard').addEventListener('click', async () => {
+    if (!mk.file || mk.running) return;
+    mkSetRunning(true);
+    mkEl('mkResult').classList.remove('show');
+    mkEl('mkLog').textContent = ''; mkEl('mkLog').style.display = 'none';
+    mkEl('mkMsg').className = 'msg'; mkEl('mkMsg').textContent = '⏳ 準備中…';
+    const payload = {
+      name: mkEl('mkName').value.trim(), eyebrow: mkEl('mkEyebrow').value.trim(),
+      skillName: mkEl('mkSkillName').value.trim(), skillEn: mkEl('mkSkillEn').value.trim(), skillDesc: mkEl('mkSkillDesc').value.trim(),
+      element: mkEl('mkElement').value.trim(), glyph: mkEl('mkGlyph').value.trim(),
+      rarity: mkRadio('mkRarity'), model: mkRadio('mkModel'), holo: mkRadio('mkHolo'),
+      overwrite: mkEl('mkOverwrite').checked,
+    };
+    if (mk.path) payload.imagePath = mk.path;
+    else { payload.imageData = new Uint8Array(await mk.file.arrayBuffer()); payload.imageName = mk.file.name || 'pasted.png'; }
+    let r;
+    try { r = await bg.makeCard(payload); } catch (err) { r = { ok: false, error: String((err && err.message) || err) }; }
+    mkSetRunning(false);
+    if (!r.ok) {
+      mkEl('mkMsg').className = 'msg err';
+      mkEl('mkMsg').textContent = '❌ ' + (r.error || '生成失敗');
+      return;
+    }
+    mkEl('mkMsg').className = 'msg ok';
+    mkEl('mkMsg').textContent = `✅ 已生成 cards/${r.file}（${(r.sizeBytes / 1024 / 1024).toFixed(2)} MB）——已加入下方的卡片清單。`;
+    mk.resultPath = r.path;
+    mkEl('mkResultName').textContent = r.file;
+    mkEl('mkResultDetail').textContent = `主色相 ${r.palette.h1}°／副色相 ${r.palette.h2}°${r.palette.neutral ? '（畫面偏灰，用預設冷色調）' : ''}　屬性 ${r.element}　卡背字「${r.glyph}」　全息效果 ${r.holo}`;
+    mkEl('mkSwatches').innerHTML = '';
+    for (const c of [r.palette.c1, r.palette.c2, r.palette.c3, r.palette.abyss]) {
+      const d = document.createElement('div'); d.className = 'mk-swatch'; d.style.background = c; d.title = c; mkEl('mkSwatches').appendChild(d);
+    }
+    // 換一個 query 字串，覆蓋同名檔案重新生成時 iframe 才不會吃到舊的快取。
+    mkEl('mkPreview').src = `../cards/${encodeURIComponent(r.file)}?t=${Date.now()}`;
+    mkEl('mkResult').classList.add('show');
+    const checkedSingle = document.querySelector('input[name=singleCard]:checked')?.value || null;
+    cards = await bg.listCards();
+    renderCardPickList(checkedSingle);
+    renderSlotEditor();
+  });
+
+  (async function init() {
+    cards = await bg.listCards();
+    screenSize = await bg.getScreenSize();
+    updateCardScale();
+    await refreshBuilds();
+    renderCardPickList(null);
+    renderSlotEditor();
+  })();
+</script>
+</body>
+</html>

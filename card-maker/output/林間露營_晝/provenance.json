@@ -1,0 +1,8 @@
+{
+  "generator": "Gemini image API",
+  "model": "gemini-3.1-flash-image",
+  "scene_prompt": "Use the reference photo as the exact composition guide (wooden deck in the foreground, tall tree trunks on the left, a trail vanishing between conifers in the centre, wooden fence and small stone planter mid-ground, railing on the right). Repaint it as a rich, atmospheric, semi-realistic illustration of a mountain forest campsite in bright daytime: strong depth with clear foreground / midground / far background layers, volumetric sunbeams through the canopy, drifting pollen and soft haze between the far trees, dappled light on the deck boards, lush ferns and moss at the edges, a hint of blue sky. Warm greens and golds. Painterly but detailed. No people, no text, no logos, no borders.",
+  "subject_prompt": "A single isolated camping still-life vignette in the same painterly semi-realistic style and warm daylight as the reference: a small olive-green canvas tent with its door tied open, a wooden folding camp chair beside it, a hanging enamel lantern on a short wooden post, a neat stack of firewood, and ferns, moss and wildflowers growing around the base. Three-quarter front view, bold readable silhouette, crisp clean outer edges, rich detail. Solid flat pure magenta background (exactly #FF00FF), completely uniform, no gradient, no floor, no cast shadow onto the background, no text, no border. The object sits alone, fully inside the frame with a margin all around.",
+  "reference_photo": "day.png (user's camp photo, used as composition reference)",
+  "postprocess": "subject: magenta-key -> alpha (key_subject.py); scene: used as generated"
+}

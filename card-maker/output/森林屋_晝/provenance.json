@@ -1,0 +1,10 @@
+{
+  "generator": "Gemini image API",
+  "model": "gemini-3.1-flash-image",
+  "background": "user's camp photo (day) used as-is",
+  "subject_source": "user's screenshot (cabin), low-res with overlays",
+  "step1_clean_prompt": "Edit this photo. Remove ALL overlaid graphics: the logo in the top-right corner, the yellow and white text banner along the bottom edge, the Chinese text label on the wooden wall, the row of pagination dots, and the arrow icons at the left and right edges. Fill each removed area naturally (wall planks, deck boards, sky) so the result looks like an untouched original photograph without any text or UI. Do NOT change, restyle, repaint, add or remove anything else. Keep every object, its colours, materials, proportions, lighting and small details exactly as in the photo. Output the full frame at the same composition.",
+  "step2_isolate_prompt": "Isolate the main subject of this photo as a clean game-asset style cut-out: the wooden cabin wall with its roof eave, door and window, the wooden deck platform in front of it, the two benches, the rabbit statues, the small mailbox props and the green mat. Replace the sky, mountains, trees, side railing and everything else outside the subject with ONE solid flat pure magenta background (#FF00FF), perfectly uniform, no gradient. The subject was cropped by the photo frame: finish the cropped edges (deck front edge, wall sides, roof) neatly and plausibly so the whole subject reads as one complete isolated object floating on the magenta, with a margin of magenta all around. No cast shadow on the background, no text. Keep the subject's colours, materials and details faithful to the photo.",
+  "step3": "",
+  "postprocess": "magenta key -> alpha (key_subject.py / key_camp2.py)"
+}
