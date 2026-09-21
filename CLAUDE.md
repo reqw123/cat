@@ -47,7 +47,7 @@
 
 - 使用者說「原檔要保留」時：新卡用**新檔名**，`overwrite` 保持 false；做完比對 `cards/` 既有檔案的 md5 確認沒被動到。
 - 生成器會改 `card-fx/cards_meta.json`（新增登記）。正式生成前先備份，事後確認只是「新增」、既有條目沒變。
-- 對既有卡片大量改寫（瘦身、批次 patch 等）要**先在獨立沙盒測試**（robocopy 出一份、junction `node_modules`），完整通過才套用到正式資料夾，並自動備份、驗證與沙盒輸出 byte-identical。專案沒有 git，沒東西可以回滾。
+- 對既有卡片大量改寫（瘦身、批次 patch 等）要**先在獨立沙盒測試**（robocopy 出一份、junction `node_modules`），完整通過才套用到正式資料夾，並自動備份、驗證與沙盒輸出 byte-identical。專案已用 git 管理（`origin` = `github.com/reqw123/cat`，分支 `main`），`cards/` 等檔案可用 git 回滾；但 `node_modules/`、`dist/`、`build/`、`card-slim/backup/` 不在版控內，這幾個仍要自己備份。
 - 不要動 `dist/`（使用者自己打包的 exe）；要測打包就輸出到暫存資料夾（`-c.directories.output=<scratch>`）。
 - 不要 `rm -rf card-maker/output`：裡面有使用者用 GUI 生成的卡的中間檔。只清自己建立的測試資料夾。
 - 測試打包後的 exe 時一律設 `LAUNCH_AT_LOGIN=false`，否則會改寫使用者的開機自啟登錄值。
