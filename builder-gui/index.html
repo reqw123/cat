@@ -327,6 +327,7 @@
     <div class="radio-row">
       <label><input type="radio" name="mode" value="single" checked /> 單卡（一個視窗一張卡）</label>
       <label><input type="radio" name="mode" value="multi" /> 多卡合一（一個視窗多張卡，iframe 疊）</label>
+      <label><input type="radio" name="mode" value="deck" /> 牌組（一張卡的位置，翻到卡背再翻回正面＝換下一張）</label>
     </div>
 
     <label class="field">🔍 卡片整體縮放比例（以現有卡片設計 560×820 為基準等比例縮放，單卡、多卡都適用；不是只放大容器——連卡片視覺本身也會跟著等比例變大/變小，不受卡片本體 CSS 272~372px 的固定範圍限制）</label>
@@ -398,12 +399,28 @@
 
     <div class="field" style="display:flex; align-items:flex-end; justify-content:space-between; gap:10px;">
       <label id="pickLabelSingle" style="margin:0;">要打包的卡片（選一張＝這個 build 唯一載入的 html，同時也是 files 白名單的內容）</label>
+      <label id="pickLabelDeck" style="margin:0; display:none;">牌組（勾選要出現的卡片、用 ▲▼ 排順序；翻面順序＝下面清單由上到下，最後一張之後回到第一張）</label>
       <label id="pickLabelMulti" style="margin:0; display:none;">格位（每一列＝畫面上一個位置，指定放哪張卡、貼在哪個座標——這就是「決定某張卡在某個位置」的地方；同一張卡可以出現在好幾格）</label>
       <button id="btnRefreshCards" style="flex:none;" title="cards/ 資料夾裡剛加的新 html 不會自動出現，按這顆重新讀一次資料夾（不會弄丟你正在編輯的內容）">🔄 重新整理卡片清單</button>
     </div>
 
     <!-- 單卡模式：從 cards/ 選一張當這個視窗唯一顯示的卡 -->
     <div id="cardPickList" class="empty-hint">讀取中...</div>
+
+    <!-- 牌組模式：出現順序＋卡片勾選清單。同一張卡只能出現一次（選的是「哪幾張＋順序」）。 -->
+    <div id="deckEditor" style="display:none;">
+      <div id="deckOrder" class="empty-hint">牌組還是空的，從下面勾選卡片加入。</div>
+      <div class="cycle-hint" id="deckHint" style="margin:4px 0 10px;"></div>
+      <div class="cycle-row" style="margin:0 0 10px;">
+        <label class="chk" title="卡片後面：主題色光暈、緩慢旋轉的光芒、上升光點、錯開的牌堆；卡片緩慢飄浮；兩道沿卡緣繞行的光；換卡時的閃光＋光環＋星芒、落定後掃過的光澤；下方點點＋自動翻頁倒數條。不勾＝只有卡片本身"><input type="checkbox" id="deckShowcase" checked /> ✨ 華麗展示效果</label>
+        <label class="chk"><input type="checkbox" id="deckAutoFlip" checked /> 🔄 開啟時自動翻頁</label>
+        <span class="slot-xy-label">每</span>
+        <input type="number" id="deckIntervalSeconds" value="2" min="0.5" max="60" step="0.5" style="width:80px;" />
+        <span class="slot-xy-label">秒翻一次（以 0.5 秒為單位；每一面——正面、卡背——各停留這麼久。不勾＝開啟時不自動翻，F4 仍可開始／暫停）</span>
+      </div>
+      <div class="slot-xy-label" style="margin-bottom:2px;">勾選＝加入牌組（加到最後面）、取消勾選＝移出牌組</div>
+      <div id="deckPool"></div>
+    </div>
 
     <!-- 多卡模式：明確列出每一格要放哪張卡＋座標，取代舊版「勾選＋貼幾格」那種
          只能決定「用幾次」、決定不了「哪一格是誰」的做法。 -->
@@ -452,6 +469,8 @@
 
     <div class="btn-row">
       <button id="btnSave" class="primary">💾 儲存</button>
+      <button id="btnSavePreview" title="先儲存，再用這份設定直接把桌面掛件跑起來（等同 npm start，不用打包；位置／縮放每次都從設定值開始）。預覽視窗用設定的結束鍵、系統匣「結束程式」或下面的「⏹ 關閉預覽」關掉">▶️ 存檔並預覽（不打包）</button>
+      <button id="btnStopPreview" style="display:none;">⏹ 關閉預覽</button>
       <button id="btnNew">✨ 清空重新開始（新增）</button>
     </div>
     <div class="msg" id="formMsg"></div>
@@ -487,6 +506,10 @@
   // 指定第幾格要放哪張卡。main.js 的 saveBuild() 完全照這裡送過去的內容寫檔，
   // 不會另外重新計算位置。
   let slots = []; // [{file, x, y}, ...]
+  // 牌組模式：出現順序（純檔名，不帶 cards/ 前綴），存檔時照這個順序寫進 yml 的 deck[]。
+  let deckFiles = [];
+  // ▶️ 預覽（不打包）：main.js 回報的狀態 { running, filename }，同一時間只有一個預覽。
+  let previewState = { running: false, filename: null };
   let slotRowRefs = []; // renderSlotEditor() 畫出來的 <input> 參照，索引對應 slots[]，
                          // 給座標挑選器拖曳時直接更新畫面用（不用整個重畫，拖曳才不會頓）
   let pickingIndex = null; // 目前正在用座標挑選器調整哪一格；null＝沒有在挑
@@ -651,6 +674,74 @@
     const b = FIVE_CARD_BASE[Math.min(index, FIVE_CARD_BASE.length - 1)];
     return { x: Math.round(b.x * cardScale), y: Math.round(b.y * cardScale) };
   }
+
+  // 牌組模式：上面是出現順序（▲▼ 調整、✕ 移出），下面是全部卡片的勾選清單（勾選＝加到最後面）。
+  // 刻意不用原生 <select>，理由同多卡格位編輯器的註解（Electron 原生下拉選單有時點不開）。
+  function renderDeckEditor() {
+    const order = document.getElementById('deckOrder');
+    const pool = document.getElementById('deckPool');
+    const hint = document.getElementById('deckHint');
+    const known = new Set(cards.map((c) => c.file));
+    order.innerHTML = '';
+    if (!deckFiles.length) {
+      order.className = 'empty-hint';
+      order.textContent = '牌組還是空的，從下面勾選卡片加入。';
+    } else {
+      order.className = '';
+      deckFiles.forEach((file, i) => {
+        const row = document.createElement('div');
+        row.className = 'slot-row';
+        const idx = document.createElement('span');
+        idx.className = 'slot-idx'; idx.textContent = '#' + (i + 1);
+        const name = document.createElement('span');
+        name.style.flex = '1'; name.style.wordBreak = 'break-all';
+        name.textContent = known.has(file) ? file : `⚠️ ${file}（找不到這個檔案，存檔時會略過）`;
+        const mk = (label, title, disabled, fn) => {
+          const b = document.createElement('button');
+          b.type = 'button'; b.className = 'row-btn'; b.textContent = label; b.title = title; b.disabled = disabled;
+          b.addEventListener('click', fn);
+          return b;
+        };
+        const swap = (a, b) => { [deckFiles[a], deckFiles[b]] = [deckFiles[b], deckFiles[a]]; renderDeckEditor(); };
+        row.append(idx, name,
+          mk('▲', '往前移', i === 0, () => swap(i, i - 1)),
+          mk('▼', '往後移', i === deckFiles.length - 1, () => swap(i, i + 1)),
+          mk('✕', '移出牌組', false, () => { deckFiles.splice(i, 1); renderDeckEditor(); }));
+        order.appendChild(row);
+      });
+    }
+    hint.textContent = deckFiles.length
+      ? `牌組共 ${deckFiles.length} 張：${deckFiles.map((f) => f.replace(/_phantom_card\.html$|\.html$/, '')).join(' → ')} → （回到第一張）`
+      : '';
+    pool.innerHTML = '';
+    const inDeck = new Set(deckFiles);
+    cards.forEach(({ file, sizeBytes }) => {
+      const row = document.createElement('label');
+      row.className = 'card-pick';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.checked = inDeck.has(file);
+      cb.addEventListener('change', () => {
+        if (cb.checked) { if (!deckFiles.includes(file)) deckFiles.push(file); }
+        else deckFiles = deckFiles.filter((f) => f !== file);
+        renderDeckEditor();
+      });
+      const name = document.createElement('span');
+      name.className = 'fname'; name.textContent = file;
+      const size = document.createElement('span');
+      size.className = 'fsize'; size.textContent = fmtSize(sizeBytes);
+      row.append(cb, name, size);
+      pool.appendChild(row);
+    });
+    renderShortcutHint();
+    renderSingleStagePreview(); // 開機位置預覽的檔名標籤＝牌組第一張
+  }
+
+  function deckIntervalValue() {
+    const v = Number(document.getElementById('deckIntervalSeconds').value);
+    return Number.isFinite(v) && v > 0 ? Math.min(60, Math.max(0.5, Math.round(v * 2) / 2)) : 2;
+  }
+  document.getElementById('deckIntervalSeconds').addEventListener('change', (e) => { e.target.value = deckIntervalValue(); renderShortcutHint(); });
+  document.getElementById('deckAutoFlip').addEventListener('change', renderShortcutHint);
 
   // 單卡模式：單選（radio）清單，挑這個 build 唯一要顯示的 html。
   // overrideChecked：明確指定哪個檔名要打勾（給「重新整理卡片清單」用，重新讀
@@ -1310,10 +1401,17 @@
     return { x: c.x + ox, y: c.y + oy };
   }
 
+  // 開機位置預覽／挑選器上顯示的檔名：單卡＝選的那張；牌組＝第一張（開機時先顯示的那張）。
+  function singlePreviewFile() {
+    if (currentMode() === 'deck') return deckFiles[0] || '';
+    const checked = document.querySelector('input[name=singleCard]:checked');
+    return checked ? checked.value : '';
+  }
+
   function renderSingleStagePreview() {
     const wrap = document.getElementById('singleStagePreviewWrap');
     const box = document.getElementById('singleStagePreview');
-    if (currentMode() !== 'single' || !screenSize) { wrap.style.display = 'none'; return; }
+    if ((currentMode() !== 'single' && currentMode() !== 'deck') || !screenSize) { wrap.style.display = 'none'; return; }
     wrap.style.display = '';
     const scale = Math.min(1, STAGE_PREVIEW_MAX_W / screenSize.width);
     box.style.width = Math.round(screenSize.width * scale) + 'px';
@@ -1323,8 +1421,7 @@
     // 線先畫在最底層，卡片疊在上面。
     box.appendChild(buildScreenBoundaryEl(scale, 0, 0));
     const abs = currentSingleAbsolute();
-    const checked = document.querySelector('input[name=singleCard]:checked');
-    const el = buildCardSlotVisual(scale, '', checked ? checked.value : '(未選卡片)');
+    const el = buildCardSlotVisual(scale, '', singlePreviewFile() || '(未選卡片)');
     el.style.left = Math.round(abs.x * scale) + 'px';
     el.style.top = Math.round(abs.y * scale) + 'px';
     box.appendChild(el);
@@ -1344,8 +1441,7 @@
     updateSingleCoordButtonState();
     updatePickerBlockOverlay();
     const abs = currentSingleAbsolute();
-    const checked = document.querySelector('input[name=singleCard]:checked');
-    await bg.openCoordPicker({ index: 'single', x: abs.x, y: abs.y, file: checked ? checked.value : '', w: CARD_OUTER_W, h: CARD_OUTER_H });
+    await bg.openCoordPicker({ index: 'single', x: abs.x, y: abs.y, file: singlePreviewFile() || '', w: CARD_OUTER_W, h: CARD_OUTER_H });
   }
 
   document.getElementById('btnPickSingleCoord').addEventListener('click', startSingleCoordPicker);
@@ -1476,16 +1572,18 @@
       }
       const counts = {};
       b.selected.forEach((s) => { counts[s.file] = (counts[s.file] || 0) + 1; });
-      const fileList = Object.entries(counts).map(([f, n]) => n > 1 ? `${f} ×${n}` : f).join('、') || '（無）';
+      const fileList = b.mode === 'deck'
+        ? (b.selected.map((sl) => sl.file).join(' → ') || '（無）')
+        : (Object.entries(counts).map(([f, n]) => n > 1 ? `${f} ×${n}` : f).join('、') || '（無）');
       const main = document.createElement('div');
       main.className = 'build-main';
-      const offsetText = b.mode === 'single' && b.defaultOffset && (b.defaultOffset.x !== 0 || b.defaultOffset.y !== 0)
+      const offsetText = (b.mode === 'single' || b.mode === 'deck') && b.defaultOffset && (b.defaultOffset.x !== 0 || b.defaultOffset.y !== 0)
         ? ` · 開機位置偏移 (${b.defaultOffset.x}, ${b.defaultOffset.y})` : '';
       main.innerHTML = `<div class="build-name">${b.productName || '(未命名)'} <span style="color:var(--text2);font-weight:400;">— ${b.filename}</span></div>
         <div class="build-detail">${fileList}${b.mode === 'single' && b.toggleKey ? ` · ${b.toggleKey}` : ''}${offsetText}</div>`;
       const badge = document.createElement('span');
       badge.className = 'badge';
-      badge.textContent = packagingFilename === b.filename ? '打包中…' : (b.mode === 'multi' ? '多卡' : '單卡');
+      badge.textContent = packagingFilename === b.filename ? '打包中…' : (b.mode === 'multi' ? '多卡' : b.mode === 'deck' ? '牌組' : '單卡');
       if (packagingFilename === b.filename) badge.classList.add('packaging');
       const editBtn = document.createElement('button');
       editBtn.textContent = '編輯';
@@ -1509,7 +1607,17 @@
         editingBadge.textContent = '✏️ 編輯中';
         row.appendChild(editingBadge);
       }
-      row.appendChild(badge); row.appendChild(editBtn); row.appendChild(packageBtn); row.appendChild(deleteBtn);
+      const previewBtn = document.createElement('button');
+      const previewing = previewState.running && previewState.filename === b.filename;
+      previewBtn.textContent = previewing ? '⏹ 關閉預覽' : '▶️ 預覽';
+      previewBtn.className = 'row-btn';
+      previewBtn.title = previewing ? '關掉這份設定的預覽視窗' : '不用打包：直接用這份「已存檔」的設定把桌面掛件跑起來（等同 npm start）。改了表單要先存檔，或用下面的「▶️ 存檔並預覽」';
+      previewBtn.addEventListener('click', async () => {
+        if (previewing) { bg.stopPreview(); return; }
+        const r = await bg.startPreview(b.filename);
+        setMsg(r.ok ? 'ok' : 'err', r.ok ? `▶️ 預覽啟動中：${b.productName || b.filename}（關掉：設定的結束鍵、系統匣「結束程式」或「⏹ 關閉預覽」）` : '❌ ' + r.error);
+      });
+      row.appendChild(badge); row.appendChild(editBtn); row.appendChild(previewBtn); row.appendChild(packageBtn); row.appendChild(deleteBtn);
       box.appendChild(row);
     });
   }
@@ -1756,10 +1864,15 @@
     // b.selected 對多卡模式來說本來就是「一格一筆、順序對應 cards[]」，直接當
     // slots 的初始值用，不用再另外推算——這就是格位編輯器的資料直接來源。
     slots = b.mode === 'multi' ? b.selected.map((s) => ({ file: s.file, x: s.x ?? 0, y: s.y ?? 0, zoom: Math.round((Number(s.zoom) > 0 ? Number(s.zoom) : 1) * 100) })) : [];
+    deckFiles = b.mode === 'deck' ? b.selected.map((s) => s.file) : [];
+    document.getElementById('deckAutoFlip').checked = b.deckAutoFlip !== false;
+    document.getElementById('deckShowcase').checked = b.deckShowcase !== false;
+    document.getElementById('deckIntervalSeconds').value = b.deckIntervalSeconds ?? 2;
     updateModeVisibility();
     updateSingleCoordButtonState();
     renderCardPickList(b.mode === 'single' ? (b.selected[0]?.file || null) : null);
     renderSlotEditor();
+    renderDeckEditor();
     setMsg('', '');
   }
 
@@ -1773,6 +1886,10 @@
     editingFilename = null;
     renderBuildList(); // 清掉清單上的「編輯中」
     slots = [];
+    deckFiles = [];
+    document.getElementById('deckAutoFlip').checked = true;
+    document.getElementById('deckShowcase').checked = true;
+    document.getElementById('deckIntervalSeconds').value = 2;
     document.getElementById('formTitle').textContent = '新增設定';
     document.getElementById('productName').value = '';
     document.querySelector('input[name=mode][value="single"]').checked = true;
@@ -1807,6 +1924,7 @@
     updateSingleCoordButtonState();
     renderCardPickList(null);
     renderSlotEditor();
+    renderDeckEditor();
     setMsg('', '');
   }
 
@@ -1815,16 +1933,21 @@
     // toggleKey／quitKey 兩種模式都會用到（main.js 不分模式一律註冊這兩個全域
     // 快捷鍵），只有 offsetRow（單卡的開機預設位置）跟 cycleKey／gestureKey
     // （多卡合一才有的六卡循環／手勢功能）才需要依模式切換顯示。
-    document.getElementById('offsetLabel').style.display = mode === 'single' ? '' : 'none';
-    document.getElementById('offsetRow').style.display = mode === 'single' ? '' : 'none';
+    // 牌組模式的視窗跟單卡一樣（一張卡大小、開機位置相對螢幕正中央），所以開機位置欄位兩種模式都顯示。
+    document.getElementById('offsetLabel').style.display = mode === 'single' || mode === 'deck' ? '' : 'none';
+    document.getElementById('offsetRow').style.display = mode === 'single' || mode === 'deck' ? '' : 'none';
     document.getElementById('pickLabelSingle').style.display = mode === 'single' ? '' : 'none';
     document.getElementById('pickLabelMulti').style.display = mode === 'multi' ? '' : 'none';
+    document.getElementById('pickLabelDeck').style.display = mode === 'deck' ? '' : 'none';
     document.getElementById('cardPickList').style.display = mode === 'single' ? '' : 'none';
+    document.getElementById('deckEditor').style.display = mode === 'deck' ? '' : 'none';
     document.getElementById('slotEditor').style.display = mode === 'multi' ? '' : 'none';
     document.getElementById('cycleKeyLabel').style.display = mode === 'multi' ? '' : 'none';
     document.getElementById('cycleKey').style.display = mode === 'multi' ? '' : 'none';
-    document.getElementById('exportLayoutKeyLabel').style.display = mode === 'multi' ? '' : 'none';
-    document.getElementById('exportLayoutKey').style.display = mode === 'multi' ? '' : 'none';
+    // 多卡＝匯出整個版面；牌組＝匯出牌組展示動畫（同一個 exportLayoutKey 欄位）
+    document.getElementById('exportLayoutKeyLabel').style.display = mode === 'multi' || mode === 'deck' ? '' : 'none';
+    document.getElementById('exportLayoutKey').style.display = mode === 'multi' || mode === 'deck' ? '' : 'none';
+    document.getElementById('exportLayoutKeyLabel').textContent = mode === 'deck' ? '匯出牌組動畫' : '匯出整個版面';
     document.getElementById('gestureKeyLabel').style.display = mode === 'multi' ? '' : 'none';
     document.getElementById('gestureKey').style.display = mode === 'multi' ? '' : 'none';
     document.getElementById('skeletonKeyLabel').style.display = mode === 'multi' ? '' : 'none';
@@ -1856,6 +1979,13 @@
       if (slots.length === 5) lines.push('　　5 張＝「中央＋四角」：第 1 張固定不動，其餘四張繞著它轉（轉到它下半部會蓋在前面、上半部躲到後面）');
       lines.push(`<b>${gestureKey}</b>　開始/暫停 手勢辨識：布＝散開、拳頭＝收縮、剪刀＝翻面，第一次按會要求攝影機權限`);
       lines.push(`<b>${skeletonKey}</b>　開啟/關閉 手部骨架視覺效果`);
+    }
+    if (mode === 'deck') {
+      lines.push(`牌組：<b>雙擊</b>翻到卡背，再雙擊（或拖曳轉回正面）＝換下一張；目前 ${deckFiles.length} 張，照清單順序循環`);
+      const autoOn = document.getElementById('deckAutoFlip').checked;
+      lines.push(`牌組自動翻頁：每 <b>${deckIntervalValue()}</b> 秒翻一次，開啟時${autoOn ? '自動開始' : '不自動開始'}；<b>${document.getElementById('autoFlipKey').value.trim() || 'F4'}</b> 開始／暫停`);
+      const deckExportKeyV = document.getElementById('exportLayoutKey').value.trim() || 'Ctrl+Alt+5';
+      lines.push(`<b>${deckExportKeyV}</b>　匯出牌組展示動畫：跟桌面上一模一樣的展示效果，每張卡各出現一次（正面、卡背各停 ${deckIntervalValue()} 秒，共 ${deckFiles.length * 2 * deckIntervalValue()} 秒）；系統匣「📤 匯出分享」也有。錄製採慢動作，約需影片長度的 4 倍時間`);
     }
     const resetKey = document.getElementById('resetKey').value.trim() || 'F11';
     lines.push(`<b>${resetKey}</b>　重設卡片位置（會先跳確認視窗）`);
@@ -1907,9 +2037,15 @@
       const checked = document.querySelector('input[name=singleCard]:checked');
       if (checked) slots.push({ file: checked.value, ...autoGridPosition(0) });
     }
+    // 切到牌組、牌組還是空的：把單卡選的那張（或多卡格位用到的卡，依序、不重複）帶進來當起點。
+    if (currentMode() === 'deck' && deckFiles.length === 0) {
+      const checked = document.querySelector('input[name=singleCard]:checked');
+      deckFiles = slots.length ? [...new Set(slots.map((sl) => sl.file).filter(Boolean))] : (checked ? [checked.value] : []);
+    }
     updateModeVisibility();
     updateSingleCoordButtonState();
     renderSlotEditor();
+    renderDeckEditor();
   }));
   document.getElementById('btnNew').addEventListener('click', resetForm);
 
@@ -1973,9 +2109,22 @@
     btn.disabled = false;
     renderCardPickList(checkedSingle);
     renderSlotEditor();
+    renderDeckEditor();
   });
 
-  document.getElementById('btnSave').addEventListener('click', async () => {
+  document.getElementById('btnSave').addEventListener('click', () => { saveCurrent(); });
+  document.getElementById('btnSavePreview').addEventListener('click', async () => {
+    const result = await saveCurrent();
+    if (!result || !result.ok) return;
+    const r = await bg.startPreview(result.filename);
+    setMsg(r.ok ? 'ok' : 'err', r.ok
+      ? `✅ 已存成 build/${result.filename}，▶️ 預覽啟動中（不用打包；關掉預覽：設定的結束鍵、系統匣「結束程式」或「⏹ 關閉預覽」）`
+      : '❌ ' + r.error);
+  });
+  document.getElementById('btnStopPreview').addEventListener('click', () => bg.stopPreview());
+
+  // 儲存目前表單（💾 儲存、▶️ 存檔並預覽 共用）；回傳 main.js saveBuild() 的結果。
+  async function saveCurrent() {
     const productName = document.getElementById('productName').value;
     const mode = currentMode();
     const toggleKey = document.getElementById('toggleKey').value;
@@ -2005,6 +2154,15 @@
         x: Number(document.getElementById('offsetX').value) || 0,
         y: Number(document.getElementById('offsetY').value) || 0,
       };
+    } else if (mode === 'deck') {
+      payload.deckFiles = deckFiles.slice();
+      payload.deckAutoFlip = document.getElementById('deckAutoFlip').checked;
+      payload.deckShowcase = document.getElementById('deckShowcase').checked;
+      payload.deckIntervalSeconds = deckIntervalValue();
+      payload.defaultOffset = {
+        x: Number(document.getElementById('offsetX').value) || 0,
+        y: Number(document.getElementById('offsetY').value) || 0,
+      };
     } else {
       payload.slots = slots.map((s, i) => ({ file: s.file, x: Number(s.x) || 0, y: Number(s.y) || 0, zoom: slotZoom(i) }));
       payload.cyclePeriodSeconds = Number(document.getElementById('cyclePeriodSeconds').value) || 10;
@@ -2020,10 +2178,21 @@
     const result = await bg.saveBuild(payload);
     document.getElementById('btnSave').disabled = false;
 
-    if (!result.ok) { setMsg('err', '❌ ' + result.error); return; }
+    if (!result.ok) { setMsg('err', '❌ ' + result.error); return result; }
     setMsg('ok', `✅ 已存成 build/${result.filename}`);
     editingFilename = result.filename;
     await refreshBuilds();
+    return result;
+  }
+
+  function renderPreviewButtons() {
+    document.getElementById('btnStopPreview').style.display = previewState.running ? '' : 'none';
+  }
+  bg.onPreviewState((st) => {
+    previewState = st || { running: false, filename: null };
+    renderPreviewButtons();
+    renderBuildList();
+    if (st && st.error) setMsg('err', '❌ ' + st.error);
   });
 
   async function refreshBuilds() {
@@ -2130,6 +2299,7 @@
     cards = await bg.listCards();
     renderCardPickList(checkedSingle);
     renderSlotEditor();
+    renderDeckEditor();
   });
 
   (async function init() {

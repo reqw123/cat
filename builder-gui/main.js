@@ -71,15 +71,19 @@ function parseBuildFile(filename) {
   }
   const meta = doc.extraMetadata || {};
   const cards = Array.isArray(meta.cards) ? meta.cards : null;
-  const mode = cards && cards.length ? 'multi' : 'single';
+  // 牌組模式（deck）：一個卡片大小的視窗，翻回正面時換成清單裡的下一張（見 C:\cat\main.js 的 DECK／buildDeckHtml()）。
+  const deck = Array.isArray(meta.deck) ? meta.deck : null;
+  const mode = cards && cards.length ? 'multi' : (deck && deck.length ? 'deck' : 'single');
   const selected = mode === 'multi'
     ? cards.map((c) => ({ file: basenameOf(c.file), x: c.x, y: c.y, zoom: c.zoom })).filter((c) => c.file)
-    : (meta.cardFile ? [{ file: basenameOf(meta.cardFile) }] : []);
+    : mode === 'deck'
+      ? deck.map((f) => ({ file: basenameOf(f) })).filter((c) => c.file)
+      : (meta.cardFile ? [{ file: basenameOf(meta.cardFile) }] : []);
   // 單卡模式的「第一次啟動、還沒被拖過時」預設位置——跟多卡模式的 cards[].x/y
   // 是不同性質的座標（那個是共用視窗裡的絕對像素位置；這個是相對螢幕正中央的
   // 偏移量，見 C:\cat\main.js 的 DEFAULT_OFFSET／createSingleWindow()），只有
   // 單卡模式才有意義，沒設過就是 {x:0,y:0}（螢幕正中央）。
-  const defaultOffset = (mode === 'single' && meta.defaultOffset
+  const defaultOffset = ((mode === 'single' || mode === 'deck') && meta.defaultOffset
     && typeof meta.defaultOffset.x === 'number' && typeof meta.defaultOffset.y === 'number')
     ? { x: meta.defaultOffset.x, y: meta.defaultOffset.y }
     : { x: 0, y: 0 };
@@ -103,6 +107,11 @@ function parseBuildFile(filename) {
   // 多卡才有意義），見 C:\cat\main.js 的 CARD_SCALE。沒設過就是預設 1（100%，
   // 跟現有卡片設計原始大小一致）。
   const cardScale = typeof meta.cardScale === 'number' && meta.cardScale > 0 ? meta.cardScale : 1;
+  // 牌組的自動翻頁（見 C:\cat\main.js 的 DECK_AUTO_FLIP／DECK_INTERVAL_S）：預設開啟、每 2 秒翻一次，間隔以 0.5 秒為單位。
+  const deckAutoFlip = meta.deckAutoFlip !== false;
+  const deckShowcase = meta.deckShowcase !== false; // 牌組展示效果（光暈、牌堆、繞邊光、換卡閃光…），預設開
+  // 跟 saveBuild()／index.html 的 deckIntervalValue()／桌面掛件的 DECK_INTERVAL_S 同一個規則：0.5 秒為單位、0.5～60
+  const deckIntervalSeconds = Number(meta.deckIntervalSeconds) > 0 ? Math.min(60, Math.max(0.5, Math.round(Number(meta.deckIntervalSeconds) * 2) / 2)) : 2;
   return {
     filename,
     productName: doc.productName || null,
@@ -141,6 +150,9 @@ function parseBuildFile(filename) {
     gestureTransitionSeconds,
     gestureShowSkeleton,
     cardScale,
+    deckAutoFlip,
+    deckIntervalSeconds,
+    deckShowcase,
     // 開機自動啟動的預設值（見 C:\cat\main.js 的 LAUNCH_AT_LOGIN_DEFAULT）：單卡、多卡都適用，
     // 只有明確寫 true 才算勾選。
     launchAtLogin: meta.launchAtLogin === true,
@@ -186,7 +198,7 @@ function slugify(name) {
 // 手刻出來（不用 yaml.dump()）：這個專案裡所有手寫的 build/*.yml 都是這種寫法
 // （一眼就看得出座標，不用展開成多行 block style），維持同一種風格，不要因為
 // 換了產生方式就讓 GUI 存出來的檔案跟手寫的長得不一樣。
-function renderYaml({ productName, files, cardFile, cards, toggleKey, quitKey, resetKey, autoFlipKey, skillKey, rarityKey, muteKey, zoomInKey, zoomOutKey, opacityUpKey, opacityDownKey, exportKey, exportFormat, gifScale, exportLayoutKey, cycleKey, gestureKey, skeletonKey, defaultOffset, cyclePeriodSeconds, gestureTransitionSeconds, gestureShowSkeleton, cardScale, launchAtLogin, ambientStars, extraName }) {
+function renderYaml({ productName, files, cardFile, cards, deck, deckAutoFlip, deckIntervalSeconds, deckShowcase, toggleKey, quitKey, resetKey, autoFlipKey, skillKey, rarityKey, muteKey, zoomInKey, zoomOutKey, opacityUpKey, opacityDownKey, exportKey, exportFormat, gifScale, exportLayoutKey, cycleKey, gestureKey, skeletonKey, defaultOffset, cyclePeriodSeconds, gestureTransitionSeconds, gestureShowSkeleton, cardScale, launchAtLogin, ambientStars, extraName }) {
   const lines = [];
   lines.push('# ⚠️ 這份設定檔是用 html 白名單管理 GUI（builder-gui/）產生/更新的，不是');
   lines.push('# 手寫的——只保留 extends/productName/files/extraMetadata 這幾個 GUI 有');
@@ -208,6 +220,18 @@ function renderYaml({ productName, files, cardFile, cards, toggleKey, quitKey, r
     // （jimmy-phantom.yml 沒有 defaultOffset，就是 main.js 預設的 {x:0,y:0}／
     // 螢幕正中央；gojo-phantom.yml 手動偏移 340,0 才特別寫出來），不必要地把
     // 每份單卡設定都印一行 {x:0,y:0} 沒有意義。
+    if (defaultOffset && (defaultOffset.x !== 0 || defaultOffset.y !== 0)) {
+      lines.push(`  defaultOffset: { x: ${defaultOffset.x}, y: ${defaultOffset.y} }`);
+    }
+  } else if (deck) {
+    // 牌組模式：清單順序＝出現順序（照順序循環），視窗位置跟單卡一樣用 defaultOffset。
+    lines.push('  cardFile: null');
+    lines.push('  deck:');
+    for (const f of deck) lines.push(`    - ${f}`);
+    // 跟預設值（自動翻頁開、每 2 秒）一樣就不寫，同其他欄位的慣例。
+    if (deckAutoFlip === false) lines.push('  deckAutoFlip: false');
+    if (deckShowcase === false) lines.push('  deckShowcase: false');
+    if (Number.isFinite(deckIntervalSeconds) && deckIntervalSeconds !== 2) lines.push(`  deckIntervalSeconds: ${deckIntervalSeconds}`);
     if (defaultOffset && (defaultOffset.x !== 0 || defaultOffset.y !== 0)) {
       lines.push(`  defaultOffset: { x: ${defaultOffset.x}, y: ${defaultOffset.y} }`);
     }
@@ -299,7 +323,7 @@ function backupExisting(filename) {
 //                                 // 不傳或兩個值都是 0 就是螢幕正中央
 //     toggleKey?: string }
 function saveBuild(payload) {
-  const { originalFilename, productName, mode, selectedFiles, slots, toggleKey, quitKey, resetKey, autoFlipKey, skillKey, rarityKey, muteKey, zoomInKey, zoomOutKey, opacityUpKey, opacityDownKey, exportKey, exportFormat, gifScale, exportLayoutKey, cycleKey, gestureKey, skeletonKey, defaultOffset, cyclePeriodSeconds, gestureTransitionSeconds, gestureShowSkeleton, cardScale, launchAtLogin, ambientStars } = payload;
+  const { originalFilename, productName, mode, selectedFiles, deckFiles, deckAutoFlip, deckIntervalSeconds, deckShowcase, slots, toggleKey, quitKey, resetKey, autoFlipKey, skillKey, rarityKey, muteKey, zoomInKey, zoomOutKey, opacityUpKey, opacityDownKey, exportKey, exportFormat, gifScale, exportLayoutKey, cycleKey, gestureKey, skeletonKey, defaultOffset, cyclePeriodSeconds, gestureTransitionSeconds, gestureShowSkeleton, cardScale, launchAtLogin, ambientStars } = payload;
 
   const trimmedName = typeof productName === 'string' ? productName.trim() : '';
   if (!trimmedName) return { ok: false, error: 'productName 不能是空的' };
@@ -309,6 +333,10 @@ function saveBuild(payload) {
   let whitelistFiles; // 白名單用的純檔名（去重）
   let cardFile = null;
   let cardsOut = null;
+  let deckOut = null;
+  let deckAutoOut = true;
+  let deckShowcaseOut = true;
+  let deckIntervalOut = 2;
   let offsetOut = null;
   let cyclePeriodOut = null;
   let gestureTransitionOut = null;
@@ -323,6 +351,20 @@ function saveBuild(payload) {
     if (raw.length > 1) return { ok: false, error: '單卡模式只能選一張卡片，多張請切換成多卡模式' };
     whitelistFiles = [raw[0]];
     cardFile = `cards/${raw[0]}`;
+    const ox = defaultOffset && Number.isFinite(defaultOffset.x) ? Math.round(defaultOffset.x) : 0;
+    const oy = defaultOffset && Number.isFinite(defaultOffset.y) ? Math.round(defaultOffset.y) : 0;
+    offsetOut = { x: ox, y: oy };
+  } else if (mode === 'deck') {
+    // 牌組：保留使用者排的順序，同一張卡只算一次（使用者選的是「哪幾張＋順序」，不是次數）。
+    const raw = [...new Set((Array.isArray(deckFiles) ? deckFiles : []).filter((f) => knownCards.has(f)))];
+    if (!raw.length) return { ok: false, error: '牌組至少要放一張卡片' };
+    whitelistFiles = raw;
+    deckOut = raw.map((f) => `cards/${f}`);
+    deckAutoOut = deckAutoFlip !== false;
+    deckShowcaseOut = deckShowcase !== false;
+    // 翻頁間隔：以 0.5 秒為單位，0.5～60 秒；沒填／非法值＝預設 2 秒
+    const iv = Number(deckIntervalSeconds);
+    deckIntervalOut = Number.isFinite(iv) && iv > 0 ? Math.min(60, Math.max(0.5, Math.round(iv * 2) / 2)) : 2;
     const ox = defaultOffset && Number.isFinite(defaultOffset.x) ? Math.round(defaultOffset.x) : 0;
     const oy = defaultOffset && Number.isFinite(defaultOffset.y) ? Math.round(defaultOffset.y) : 0;
     offsetOut = { x: ox, y: oy };
@@ -377,6 +419,10 @@ function saveBuild(payload) {
     files: whitelistFiles.map((f) => `cards/${f}`),
     cardFile,
     cards: cardsOut,
+    deck: deckOut,
+    deckAutoFlip: deckAutoOut,
+    deckShowcase: deckShowcaseOut,
+    deckIntervalSeconds: deckIntervalOut,
     toggleKey: typeof toggleKey === 'string' && toggleKey.trim() ? toggleKey.trim() : null,
     quitKey: typeof quitKey === 'string' && quitKey.trim() ? quitKey.trim() : null,
     resetKey: typeof resetKey === 'string' && resetKey.trim() ? resetKey.trim() : null,
@@ -668,6 +714,93 @@ function cancelPackaging() {
 // backupExisting()），C:\cat 沒有 git，這是唯一救得回來的方式——「確定要刪除」
 // 這種確認對話框是 renderer 端的 window.confirm() 負責問，這裡只管實際刪檔，
 // 不重複做一次確認。
+// ==================== ▶️ 預覽（不打包，等同 npm start） ====================
+// 用這個 GUI 自己的 electron.exe 直接跑 C:\cat（桌面掛件本體），把 build/*.yml 的 extraMetadata 寫成 JSON、
+// 用環境變數 CARD_SHELL_CONFIG 疊在 package.json 上（等同打包時合併進封裝的 package.json，見 C:\cat\main.js 開頭）。
+// 每次預覽都用一個清空的 userData（--user-data-dir）：不會被上次預覽存下的位置／縮放蓋掉 GUI 裡剛調好的設定，
+// 也不會碰到打包好的 exe 或 npm start 的存檔。LAUNCH_AT_LOGIN=false：預覽絕不改開機自啟的登錄值。
+// 同一時間只跑一個預覽，再按一次（或換一份設定）會先關掉舊的；GUI 關閉時也一起關掉。
+let previewChild = null;
+let previewFilename = null;
+
+function sendPreviewState(extra) {
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('bg-preview-state', Object.assign({ running: !!previewChild, filename: previewFilename }, extra || {}));
+  }
+}
+
+function stopPreview() {
+  const child = previewChild;
+  if (!child) return;
+  previewChild = null;
+  // Electron 有 GPU／渲染等子行程，Windows 上用 taskkill /T 整棵關掉（只殺主行程時子行程會多留一下、佔著 userData）
+  try {
+    if (process.platform === 'win32') spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
+    else process.kill(child.pid);
+  } catch (e) { /* 已經自己結束了 */ }
+}
+
+function startPreview(filename) {
+  const full = path.join(BUILD_DIR, filename);
+  let doc;
+  try {
+    doc = yaml.load(fs.readFileSync(full, 'utf8')) || {};
+  } catch (err) {
+    return { ok: false, error: `讀不到 build/${filename}：${err.message}` };
+  }
+  const meta = Object.assign({}, doc.extraMetadata || {});
+  stopPreview();
+
+  // 固定用專屬資料夾（不跟著 GUI 的 userData 走——GUI 用 `electron builder-gui/main.js` 啟動時 userData 是
+  // Electron 共用的預設資料夾），每次預覽前清空 userdata。
+  const previewRoot = path.join(app.getPath('appData'), 'phantom-card-preview');
+  const configPath = path.join(previewRoot, 'config.json');
+  // 每次都用新的 userdata 資料夾：剛關掉的上一個預覽可能還佔著舊資料夾（子行程晚一點才結束），
+  // 直接清空會被拒絕存取。舊的盡量刪，刪不掉（還在用）就留到下次再刪。
+  const userDataDir = path.join(previewRoot, `userdata-${Date.now()}`);
+  try {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify(meta), 'utf8');
+  } catch (err) {
+    return { ok: false, error: `準備預覽資料夾失敗：${err.message}` };
+  }
+  for (const d of fs.readdirSync(previewRoot)) {
+    const full = path.join(previewRoot, d);
+    if (d.startsWith('userdata') && full !== userDataDir) {
+      try { fs.rmSync(full, { recursive: true, force: true }); } catch (e) { /* 還在用，下次再刪 */ }
+    }
+  }
+
+  const env = Object.assign({}, process.env, { CARD_SHELL_CONFIG: configPath, LAUNCH_AT_LOGIN: 'false' });
+  for (const k of ['ELECTRON_RUN_AS_NODE', 'CARD_FILE', 'CARDS_JSON', 'DECK_JSON']) delete env[k];
+  let child;
+  try {
+    child = spawn(process.execPath, [ROOT_DIR, `--user-data-dir=${userDataDir}`], { cwd: ROOT_DIR, env });
+  } catch (err) {
+    return { ok: false, error: `啟動預覽失敗：${err.message}` };
+  }
+  previewChild = child;
+  previewFilename = filename;
+  let tail = '';
+  const onData = (chunk) => { tail = (tail + chunk.toString()).slice(-3000); };
+  child.stdout.on('data', onData);
+  child.stderr.on('data', onData);
+  const startedAt = Date.now();
+  child.on('exit', (code) => {
+    if (previewChild !== child) return; // 被新的預覽取代，不用回報
+    previewChild = null;
+    // 幾秒內就非正常結束＝多半是設定有問題（例如找不到卡片），把輸出最後一截帶給畫面
+    const crashed = code !== 0 && code !== null && Date.now() - startedAt < 8000;
+    sendPreviewState(crashed ? { error: `預覽程式結束（代碼 ${code}）：\n${tail.slice(-800)}` } : {});
+  });
+  sendPreviewState();
+  return { ok: true };
+}
+
+ipcMain.handle('bg-start-preview', (_e, filename) => startPreview(filename));
+ipcMain.handle('bg-stop-preview', () => { stopPreview(); sendPreviewState(); return { ok: true }; });
+app.on('will-quit', stopPreview);
+
 function deleteBuild(filename) {
   if (packagingFilename === filename) {
     return { ok: false, error: `「${filename}」正在打包中，請等打包完成再刪除` };

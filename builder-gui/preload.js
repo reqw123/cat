@@ -18,6 +18,11 @@ contextBridge.exposeInMainWorld('builderGui', {
   // resolve 一個新結果。
   cancelPackage: () => ipcRenderer.invoke('bg-cancel-package'),
 
+  // ▶️ 預覽（不打包，等同 npm start）：用某份 build/*.yml 的設定直接把桌面掛件跑起來，見 main.js startPreview()。
+  startPreview: (filename) => ipcRenderer.invoke('bg-start-preview', filename),
+  stopPreview: () => ipcRenderer.invoke('bg-stop-preview'),
+  onPreviewState: (callback) => ipcRenderer.on('bg-preview-state', (_event, data) => callback(data)),
+
   // 座標挑選器（虛擬卡片）：見 main.js openCoordPicker() 開頭的說明。
   openCoordPicker: (payload) => ipcRenderer.invoke('bg-open-picker', payload),
   closePicker: () => ipcRenderer.invoke('bg-close-picker'),

@@ -33,9 +33,40 @@ const cardExporter = require('./card-export/exporter');
 // 預覽，不用真的去改 package.json：
 //   CARD_FILE=cards/gojo_phantom_card.html npx electron .
 //   CARDS_JSON='[{"file":"cards/jimmy_phantom_card.html","x":80,"y":80},{"file":"cards/gojo_phantom_card.html","x":700,"y":80}]' npx electron .
-const pkg = require('./package.json');
+// builder-gui 的「▶️ 預覽」：不用打包就用某份 build/*.yml 的設定跑起來——GUI 把那份 yml 的 extraMetadata 寫成 JSON，
+// 用環境變數 CARD_SHELL_CONFIG 指過來，疊在 package.json 上面（等同打包時 electron-builder 把 extraMetadata 合併進
+// 封裝後的 package.json）。沒設這個環境變數時跟以前完全一樣。
+const pkg = (() => {
+  const base = require('./package.json');
+  if (!process.env.CARD_SHELL_CONFIG) return base;
+  try {
+    return Object.assign({}, base, JSON.parse(fs.readFileSync(process.env.CARD_SHELL_CONFIG, 'utf8')));
+  } catch (e) {
+    console.warn('[card-shell] CARD_SHELL_CONFIG 讀取失敗，改用 package.json：', e.message);
+    return base;
+  }
+})();
 const CARD_FILE = process.env.CARD_FILE || pkg.cardFile || null;
 const MULTI_CARDS = process.env.CARDS_JSON ? JSON.parse(process.env.CARDS_JSON) : pkg.cards || null;
+// 牌組模式（deck）：視窗只有一張卡大（同單卡），牌組裡每張卡各一個 iframe 疊在一起、一次只顯示一張。
+// 卡片自己翻到背面（雙擊／拖曳／F4），再從背面翻回正面時，換成牌組裡的下一張（照清單順序循環）——
+// 也就是「A 正面 → A 卡背 → B 正面 → B 卡背 → …」。設定：pkg.deck = ["cards/a.html", "cards/b.html", …]，
+// 測試可用環境變數 DECK_JSON 覆蓋。有 cards（多卡合一）時以多卡為準；有 deck 時忽略 cardFile。見 buildDeckHtml()。
+const DECK = (() => {
+  const raw = process.env.DECK_JSON ? JSON.parse(process.env.DECK_JSON) : pkg.deck;
+  return Array.isArray(raw) ? raw.filter((f) => typeof f === 'string' && f) : null;
+})();
+const IS_DECK = !(Array.isArray(MULTI_CARDS) && MULTI_CARDS.length > 0) && Array.isArray(DECK) && DECK.length > 0;
+// 牌組的自動翻頁：由牌組舞台自己計時，每隔 DECK_INTERVAL_S 秒讓目前這張翻一次（正面→卡背→下一張正面…），
+// 所以每一面停留 DECK_INTERVAL_S 秒。間隔以 0.5 秒為單位（0.5～60）。deckAutoFlip:false＝開啟時不自動翻頁
+// （F4 仍可開始／暫停）。牌組模式的 F4 控制的就是這個計時，不是卡片自己內建、寫死 1 秒的每秒翻面。
+const DECK_AUTO_FLIP = process.env.DECK_AUTO_FLIP != null ? process.env.DECK_AUTO_FLIP === 'true' : pkg.deckAutoFlip !== false;
+// 牌組的展示效果（光暈、光芒、牌堆、飄浮、繞邊光、換卡閃光…，見 buildDeckHtml()）：預設開，deckShowcase:false 關掉。
+const DECK_SHOWCASE = process.env.DECK_SHOWCASE != null ? process.env.DECK_SHOWCASE === 'true' : pkg.deckShowcase !== false;
+const DECK_INTERVAL_S = (() => {
+  const v = Number(process.env.DECK_INTERVAL_SECONDS) || Number(pkg.deckIntervalSeconds) || 2;
+  return Math.min(60, Math.max(0.5, Math.round(v * 2) / 2));
+})();
 const TOGGLE_KEY = process.env.TOGGLE_KEY || pkg.toggleKey || 'F9';
 const QUIT_KEY = process.env.QUIT_KEY || pkg.quitKey || 'F10';
 // 重設卡片位置：單卡、多卡都適用（不像 cycleKey/gestureKey 限定多卡），跟
@@ -427,6 +458,8 @@ const TRANSPARENT_CSS = `html,body{ background:transparent !important; overflow:
 
 // ==================== 單卡模式 ====================
 function createSingleWindow() {
+  // 牌組模式也走這個函式：視窗大小、位置存檔、縮放／透明度、右鍵拖曳全部跟單卡一樣，只是載入的是
+  // buildDeckHtml() 產生的牌組舞台頁（裡面每張卡一個 iframe），見下面 IS_DECK 的分支。
   const saved = loadJson(POSITION_FILE);
   if (saved) view = { zoom: clampZoom(saved.zoom), opacity: clampOpacity(saved.opacity) };
   const winW = Math.round(WIN_W * view.zoom);
@@ -463,11 +496,34 @@ function createSingleWindow() {
       autoplayPolicy: 'no-user-gesture-required',
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
+      // 牌組模式的卡片跑在 iframe 裡，要這個選項 preload 才會套用進去（理由同多卡模式 createMultiWindow()）。
+      nodeIntegrationInSubFrames: IS_DECK,
     },
   });
 
   startKeepOnTop();
   win.on('moved', schedulePositionSave);
+
+  if (IS_DECK) {
+    const stagePath = path.join(app.getPath('userData'), 'deck.generated.html');
+    fs.writeFileSync(stagePath, buildDeckHtml(DECK, CARD_SCALE * view.zoom, view.opacity, DECK_AUTO_FLIP, DECK_INTERVAL_S, DECK_SHOWCASE));
+    win.loadFile(stagePath);
+    win.webContents.on('did-finish-load', () => {
+      pushSingleView(); // 舞台頁的 __phantomCardViewSet 會轉發給每張卡（F4 的狀態由舞台回報，見 toggleAutoFlipCmd()）
+    });
+    // 每張卡的 iframe 載入完：跟多卡模式一樣注入透明背景／縮放 CSS 與通用腳本，再加上牌組專用的換卡偵測。
+    win.webContents.on('did-frame-finish-load', (_event, isMainFrame, frameProcessId, frameRoutingId) => {
+      if (isMainFrame) return;
+      const frame = webFrameMain.fromId(frameProcessId, frameRoutingId);
+      if (!frame) return;
+      frame.executeJavaScript(TRANSPARENT_CSS_JS).catch(() => {});
+      frame.executeJavaScript(INJECTED_SCRIPT)
+        .then(() => frame.executeJavaScript(DECK_FRAME_SCRIPT))
+        .catch((err) => console.warn(`${LOG_TAG} 牌組卡片腳本注入失敗：`, err));
+    });
+    win.setIgnoreMouseEvents(clickThrough, { forward: true });
+    return;
+  }
 
   // ⚠️ 不能用 win.loadFile(path)：它不會替路徑編碼，檔名裡有 % # ? 就會被當成網址語法
   // （例如 `xxx%3F2.html` 的 %3F 被解成 `?`），找不到檔案、整個視窗一片空白——圖片一鍵生成
@@ -537,6 +593,497 @@ function sendView(cmd) {
     const [kind, dir] = parseViewCmd(cmd);
     stepSingleView(kind, dir, true);
   }
+}
+
+// ==================== 牌組模式 ====================
+// 注入到牌組裡每張卡（iframe）的腳本，接在 INJECTED_SCRIPT 之後執行。不改卡片 html、也不攔截卡片自己的雙擊翻面
+// （card-fx 靠 dblclick 取消「單擊＝技能演出」的計時器，攔截會誤觸技能）。
+// 換卡時機：每一幀讀卡片「實際畫出來」的偏航角——getComputedStyle(#card).transform 的 rotateY，而不是 --ry：
+// 新模板的翻面是把 --ry 直接設成目標角度、再由 CSS transition 補間 0.5 秒，讀 --ry 會在雙擊當下就以為已經翻回
+// 正面，卡背沒轉就被換掉、下一張直接跳出來（使用者回報「翻回來很突兀」的原因）。computed transform 在補間中途
+// 是當下的值，舊卡（flipCur 逐幀逼近）也一樣適用。.card 的 transform 是 rotateX(rx) rotateY(ry)，矩陣的
+// m11＝cos(ry)、m31＝sin(ry)（不受 rotateX 影響），所以 ry＝atan2(m31, m11)。
+// 「目前這張」轉到側面、從背面變成正面的那一幀：先把自己整頁藏起來，再把當下角度告訴舞台，舞台讓下一張從同一個
+// 角度接著轉完。雙擊、拖曳轉過去、自動翻頁都會經過這個轉折。
+// 另外回報卡片的位置／大小／主題色（card-meta）給舞台畫展示效果，目前這張也回報即時角度（讓繞邊光跟著翻面收窄）。
+const DECK_FRAME_SCRIPT = `
+(function(){
+  if (window.__phantomDeckInit || window.top === window.self) return;
+  window.__phantomDeckInit = true;
+  var card = document.getElementById('card');
+  function visualRy(){
+    if (!card) return 0;
+    var t = getComputedStyle(card).transform;
+    if (!t || t === 'none') return 0;
+    try { var m = new DOMMatrixReadOnly(t); return Math.atan2(m.m31, m.m11) * 180 / Math.PI; } catch (e) { return 0; }
+  }
+  function isBackAt(ry){ return Math.abs(ry) > 90; }
+  var meta = {};
+  try { meta = JSON.parse(document.getElementById('card-meta').textContent); } catch (e) {}
+  function info(){
+    if (!card) return null;
+    var r = card.getBoundingClientRect();
+    var s = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--shell-scale')) || 1;
+    var rar = window.cardFx && window.cardFx.rarity ? window.cardFx.rarity() : meta.rarity;
+    return { cx: r.left + r.width / 2, cy: r.top + r.height / 2, w: card.offsetWidth * s, h: card.offsetHeight * s,
+             colors: meta.colors || null, rarity: rar || '', name: meta.name || '' };
+  }
+  var active = false, deckSize = 1, prevBack = isBackAt(visualRy()), lastSent = 999, lastInfo = 0;
+  function tick(ts){
+    var ry = visualRy(), b = isBackAt(ry);
+    if (active) {
+      if (Math.abs(ry - lastSent) > 0.3) { lastSent = ry; window.parent.postMessage({ __deckAngle: ry }, '*'); }
+      if (ts - lastInfo > 500) { lastInfo = ts; window.parent.postMessage({ __deckInfo: info() }, '*'); }
+      if (b && !prevBack) window.parent.postMessage({ __deckFace: 'back' }, '*');
+      if (deckSize > 1) {
+        if (!b && prevBack) {
+          active = false;
+          document.documentElement.style.opacity = '0';
+          window.parent.postMessage({ __deckAdvance: ry }, '*');
+        }
+      }
+    }
+    prevBack = b;
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+  // 自動翻頁：舞台計時送來「翻一次」。走卡片自己的雙擊翻面（新舊卡片都通用），但自動翻面照慣例不發聲：
+  // card-fx 每次發聲前都同步讀 localStorage 的靜音旗標，所以送出雙擊前後暫時設成靜音再還原（整段同步執行，
+  // 不會影響使用者自己的靜音設定；card-fx 沒有監聽 storage 事件）。拖曳中不翻，免得搶走使用者手上的卡。
+  window.addEventListener('message', function(e){
+    if (!e.data || !e.data.__deckFlipNow || !active || !card || card.classList.contains('dragging')) return;
+    var k = 'phantomCardFx:muted', prev = null;
+    try { prev = localStorage.getItem(k); localStorage.setItem(k, '1'); } catch (err) {}
+    card.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+    try { if (prev === null) localStorage.removeItem(k); else localStorage.setItem(k, prev); } catch (err) {}
+  });
+  window.addEventListener('message', function(e){
+    var d = e.data;
+    if (!d || d.__deckActive === undefined) return;
+    deckSize = d.n || 1;
+    active = !!d.__deckActive;
+    prevBack = isBackAt(visualRy());
+    if (active) { document.documentElement.style.opacity = ''; lastInfo = 0; lastSent = 999; }
+    else {
+      window.dispatchEvent(new Event('blur')); // 拖曳到一半被換掉：卡片的 onPointerUp 有接 blur，放手後慣性自己吸回整圈
+      // 舞台送這個訊息之前已經把外框設成 leaving（幾乎透明），換卡當下藏起整頁的任務完成了；還原頁面透明度，
+      // 之後輪到「下一張」預先渲染時才畫得出來（整頁 opacity 0 的 iframe Chromium 不會畫，換卡會空好幾幀）
+      requestAnimationFrame(function(){ requestAnimationFrame(function(){ if (!active) document.documentElement.style.opacity = ''; }); });
+    }
+  });
+  // 卡片下方的操作提示：「雙擊翻面看背面」→ 補上牌組的行為
+  var h = document.querySelector('.hint');
+  if (h) h.textContent = h.textContent.split(' · ').map(function(p){
+    if (/雙擊/.test(p)) return '雙擊翻面，翻回正面換下一張';
+    if (/自動翻面/.test(p)) return ${JSON.stringify(AUTOFLIP_KEY)} + ' 開始／暫停自動翻頁';
+    return p;
+  }).join(' · ');
+  window.parent.postMessage({ __deckReady: true, __deckInfo: info() }, '*');
+})();
+`;
+
+// 牌組舞台頁：一個全視窗的容器，牌組裡每張卡各一個 iframe（跟多卡模式一樣靠 iframe 隔開每張卡的 document）。
+// 同一時間只有「目前這張」顯示並接收滑鼠；目前這張翻到背面時，下一張先在看不見的狀態下渲染好（warm），換卡時
+// 直接接上。離開的那張再留 1.5 秒（讓它的慣性／翻面動畫在看不見的狀態下跑完、停回正面）才整個 display:none，
+// 避免十幾張卡同時在跑動畫。單卡模式由 main.js 直接對頁面 executeJavaScript 的幾個入口（toggleAutoFlip、
+// __phantomCardFxRun、__phantomCardViewSet）在這裡都有定義，轉發給目前這張——所以快捷鍵、系統匣、縮放、
+// 畫面提示這些單卡的程式碼路徑在牌組模式完全不用改。
+// 展示效果（showcase，deckShowcase:false 可關）：兩張全視窗 canvas 夾住卡片——後面：主題色呼吸光暈、緩慢旋轉的
+// 光芒、上升的光點、後面疊 2～3 張錯開的牌背（看得出是一疊牌組）；前面：兩道沿卡緣繞行的光（跟著翻面角度收窄）、
+// 換卡時的閃光＋光環＋星芒、落定後掃過的光澤。卡片本身整個緩慢飄浮。下方點點＝第幾張，自動翻頁時有倒數進度條。
+// 顏色取自每張卡 card-meta 的 colors（換卡時漸變到新卡的顏色）。
+function buildDeckHtml(files, scale, opacity, autoFlip, intervalS, showcase) {
+  const frames = files.map((f, i) => {
+    const src = pathToFileURL(path.join(__dirname, f)).href.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    return `<div class="deck-card${i === 0 ? ' cur' : ''}"><iframe src="${src}#view=${scale.toFixed(4)},${opacity}"></iframe></div>`;
+  }).join('\n');
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html,body{ margin:0; height:100%; background:transparent; overflow:hidden; }
+  #deck{ position:fixed; inset:0; perspective:1300px; }
+  #fxBack, #fxFront{ position:absolute; left:0; top:0; pointer-events:none; }
+  #fxBack{ z-index:0; }
+  #fxFront{ z-index:10; }
+  .deck-card{ position:absolute; inset:0; display:none; pointer-events:none; z-index:1; }
+  .deck-card.cur{ display:block; pointer-events:auto; z-index:3; }
+  .deck-card.warm, .deck-card.leaving{ display:block; opacity:.01; } /* 不能用 0：完全透明的 iframe 不會被繪製，換上來時要空幾幀才有畫面 */
+  .deck-card.cur.warm{ opacity:1; }
+  .deck-card iframe{ width:100%; height:100%; border:0; background:transparent; }
+  #deckDots{ position:absolute; left:0; right:0; z-index:11; display:flex; flex-direction:column; align-items:center; gap:6px; pointer-events:none; }
+  #deckDots .row{ display:flex; gap:7px; align-items:center; }
+  #deckDots i{ display:block; width:7px; height:7px; border-radius:50%; background:rgba(255,255,255,.28); box-shadow:0 0 4px rgba(0,0,0,.6); transition:all .35s ease; }
+  #deckDots i.on{ width:20px; border-radius:4px; background:var(--dc, #f0c060); box-shadow:0 0 10px var(--dc, #f0c060); }
+  #deckDots .bar{ width:74px; height:3px; border-radius:2px; background:rgba(255,255,255,.16); overflow:hidden; opacity:0; transition:opacity .3s; }
+  #deckDots .bar b{ display:block; height:100%; width:0; background:var(--dc, #f0c060); }
+</style>
+</head>
+<body>
+<div id="deck">
+<canvas id="fxBack"></canvas>
+${frames}
+<canvas id="fxFront"></canvas>
+<div id="deckDots"><div class="row"></div><div class="bar"><b></b></div></div>
+</div>
+<script>
+(function(){
+  var els = Array.prototype.slice.call(document.querySelectorAll('.deck-card'));
+  var n = els.length, cur = 0;
+  var view = { scale: ${scale}, opacity: ${opacity} };
+  var SHOWCASE = ${showcase ? 'true' : 'false'};
+  // 自動翻頁（見 main.js 的 DECK_AUTO_FLIP／DECK_INTERVAL_S）：每隔 AUTO_MS 叫目前這張無聲翻一次。
+  var AUTO_MS = ${Math.round(intervalS * 1000)};
+  var afOn = ${autoFlip ? 'true' : 'false'}, afTimer = null, afLast = performance.now();
+  var leaveTimers = [];
+  var info = [];          // 每張卡回報的 {cx, cy, w, h, colors, rarity, name}
+  var angle = 0;          // 目前這張的即時偏航角
+  var introDone = false;  // 開場閃光只做一次
+  var shell = window.cardShell || {};
+  var deck = document.getElementById('deck');
+  function win(i){ var f = els[i].querySelector('iframe'); return f && f.contentWindow; }
+  function post(i, msg){ var w = win(i); if (w) w.postMessage(msg, '*'); }
+  function indexOf(src){ for (var i = 0; i < n; i++) if (win(i) === src) return i; return -1; }
+  function startAF(){
+    clearInterval(afTimer);
+    afLast = performance.now();
+    afTimer = afOn ? setInterval(function(){ afLast = performance.now(); post(cur, { __deckFlipNow: true }); }, AUTO_MS) : null;
+  }
+  // 翻面（翻到卡背、或翻回正面換卡）如果不是計時器造成的（使用者雙擊／拖曳），重新起算，這一面才會停滿一個間隔；
+  // 計時器自己造成的翻面（計時後 0.1～0.3 秒內到達側面）不重算——節拍固定，匯出長度才會剛好是 張數×2×間隔。
+  function flipped(){ if (afOn && performance.now() - afLast > Math.min(700, AUTO_MS * 0.6)) startAF(); }
+
+  // ---------- 幾何與顏色 ----------
+  function geo(){
+    var g = info[cur];
+    if (g && g.w > 0) return g;
+    for (var i = 0; i < n; i++) if (info[i] && info[i].w > 0) return info[i];
+    var s = view.scale || 1;
+    return { cx: innerWidth / 2, cy: innerHeight * 0.493, w: 372 * s, h: 520.8 * s };
+  }
+  function hexRgb(h){
+    var m = /^#?([0-9a-f]{6})$/i.exec(String(h || '').trim());
+    if (!m) return null;
+    var v = parseInt(m[1], 16);
+    return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+  }
+  var DEF = [[240, 192, 96], [90, 140, 255], [220, 230, 255]];
+  function paletteOf(i){
+    var c = info[i] && info[i].colors, out = [];
+    for (var k = 0; k < 3; k++) out.push((c && hexRgb(c[k])) || DEF[k]);
+    return out;
+  }
+  var colFrom = paletteOf(0), colTo = colFrom, colT0 = 0;
+  function colorTo(i){ colFrom = currentCols(performance.now()); colTo = paletteOf(i); colT0 = performance.now(); }
+  function currentCols(t){
+    var k = Math.min(1, (t - colT0) / 700), out = [];
+    for (var j = 0; j < 3; j++) out.push([0, 1, 2].map(function(q){ return Math.round(colFrom[j][q] + (colTo[j][q] - colFrom[j][q]) * k); }));
+    return out;
+  }
+  function rgba(c, a){ return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')'; }
+
+  // ---------- 下方點點＋自動翻頁進度條 ----------
+  var dots = document.getElementById('deckDots'), dotRow = dots.querySelector('.row'), bar = dots.querySelector('.bar'), barFill = bar.querySelector('b');
+  for (var di = 0; di < n; di++) dotRow.appendChild(document.createElement('i'));
+  function updateDots(){
+    var list = dotRow.children;
+    for (var i = 0; i < list.length; i++) list[i].className = i === cur ? 'on' : '';
+    var c = paletteOf(cur)[0];
+    dots.style.setProperty('--dc', 'rgb(' + c.join(',') + ')');
+  }
+  dots.style.display = n > 1 ? 'flex' : 'none';
+
+  // ---------- 換卡 ----------
+  function advance(a){
+    var from = cur, to = (cur + 1) % n;
+    post(from, { __deckActive: false, n: n });
+    els[from].classList.remove('cur');
+    els[from].classList.add('leaving');
+    clearTimeout(leaveTimers[from]);
+    leaveTimers[from] = setTimeout(function(){ els[from].classList.remove('leaving'); }, 1500);
+
+    cur = to;
+    angle = a;
+    var el = els[to];
+    clearTimeout(leaveTimers[to]);
+    el.classList.remove('leaving', 'warm');
+    // 從舊卡轉到側面的同一個角度接著轉完：跟卡片自己翻面一樣的 1300px 透視、以卡片中心為軸，
+    // 時間依剩下的角度算（卡片自己的翻面是 0.5 秒 ease-out，過了側面後大約還剩 0.4 秒）。
+    el.style.transition = 'none';
+    el.style.transform = 'rotateY(' + a + 'deg)';
+    el.classList.add('cur');
+    void el.offsetWidth;
+    var ms = Math.max(140, Math.round(Math.abs(a) / 90 * 400));
+    el.style.transition = 'transform ' + ms + 'ms cubic-bezier(.25,.6,.3,1)';
+    el.style.transform = 'rotateY(0deg)';
+    post(to, { __deckActive: true, n: n });
+    flipped();
+    if (shell.reportDeck) shell.reportDeck(to);
+    updateDots();
+    if (SHOWCASE) { colorTo(to); burst(); setTimeout(glint, ms * 0.7); }
+  }
+
+  window.addEventListener('message', function(e){
+    var d = e.data;
+    if (!d) return;
+    var i = indexOf(e.source);
+    if (i < 0) return;
+    if (d.__deckInfo) {
+      var inf = d.__deckInfo;
+      info[i] = inf;
+      // 只用「目前這張、而且有尺寸」的回報設旋轉軸／透視中心：隱藏中（display:none）的卡回報的是 0
+      if (i === cur && inf && inf.w > 0) {
+        var org = inf.cx + 'px ' + inf.cy + 'px';
+        deck.style.perspectiveOrigin = org;
+        for (var k = 0; k < n; k++) els[k].style.transformOrigin = org;
+        if (!introDone) { introDone = true; colFrom = colTo = paletteOf(cur); updateDots(); if (SHOWCASE) { burst(); setTimeout(glint, 250); } }
+      }
+    }
+    if (d.__deckReady) {
+      post(i, { __deckActive: i === cur, n: n });
+      post(i, { __phantomCardViewSet: view });
+    } else if (d.__deckAngle !== undefined && i === cur) {
+      angle = Number(d.__deckAngle) || 0;
+    } else if (d.__deckFace === 'back' && i === cur) {
+      flipped();
+      if (n > 1) els[(cur + 1) % n].classList.add('warm'); // 下一張先渲染好，換卡時才不會空一格
+    } else if (d.__deckAdvance !== undefined && i === cur && n > 1) {
+      advance(Number(d.__deckAdvance) || 0);
+    } else if (d.__phantomCardMove && shell.moveBy) {
+      shell.moveBy(d.dx, d.dy); // 右鍵拖曳：舞台是最上層 frame，moveBy 會搬整個視窗
+    } else if (d.__phantomCardViewBy && shell.viewBy) {
+      shell.viewBy(d.__phantomCardViewBy.kind, d.__phantomCardViewBy.dir, d.__phantomCardViewBy.big);
+    }
+  });
+
+  // 以下是 main.js 單卡模式會直接呼叫的入口（executeJavaScript），在牌組模式轉發給目前這張卡。
+  window.toggleAutoFlip = function(){ afOn = !afOn; startAF(); return afOn; };
+  startAF();
+  // 匯出牌組展示動畫（card-export/exporter.js 的 exportDeck）：舞台以 autoFlip=false 載入，全部準備好之後才呼叫
+  // start()——從第一張的正面開始自動翻頁，並補一次開場閃光，錄影的第一格就是開場。回傳開始的時間（頁面時鐘）。
+  window.__deckExport = {
+    start: function(){
+      afOn = true; startAF(); updateDots();
+      if (SHOWCASE) { burst(); setTimeout(glint, 250); }
+      return performance.now();
+    }
+  };
+  window.__phantomCardFxRun = function(cmd){ post(cur, { __phantomCardFx: cmd, sound: true }); };
+  window.__phantomCardViewSet = function(scale, opacity){
+    view = { scale: Number(scale), opacity: Number(opacity) };
+    applyFxOpacity(); // 展示效果跟著卡片一起變透明（卡片自己的透明度由 iframe 裡的 --shell-opacity 處理）
+    for (var i = 0; i < n; i++) post(i, { __phantomCardViewSet: view });
+  };
+  function applyFxOpacity(){
+    ['fxBack', 'fxFront', 'deckDots'].forEach(function(id){ document.getElementById(id).style.opacity = String(view.opacity); });
+  }
+  applyFxOpacity();
+  if (shell.onCursor) shell.onCursor(function(p){ post(cur, { __phantomCursor: true, p: p }); });
+
+  // ---------- 展示效果 ----------
+  var back = document.getElementById('fxBack'), front = document.getElementById('fxFront');
+  var bctx = back.getContext('2d'), fctx = front.getContext('2d');
+  var dpr = 1, W = 0, H = 0;
+  function resize(){
+    dpr = window.devicePixelRatio || 1; W = innerWidth; H = innerHeight;
+    [back, front].forEach(function(c){ c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); c.style.width = W + 'px'; c.style.height = H + 'px'; });
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  function roundRectPath(ctx, x, y, w, h, r){
+    r = Math.max(0, Math.min(r, w / 2, h / 2));
+    ctx.beginPath();
+    ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.arcTo(x + w, y, x + w, y + r, r);
+    ctx.lineTo(x + w, y + h - r); ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+    ctx.lineTo(x + r, y + h); ctx.arcTo(x, y + h, x, y + h - r, r);
+    ctx.lineTo(x, y + r); ctx.arcTo(x, y, x + r, y, r);
+    ctx.closePath();
+  }
+  // 沿著圓角矩形周長走 u（0～1）的位置（中心為原點）
+  function perimeterPoint(w, h, r, u){
+    var sw = w - 2 * r, sh = h - 2 * r, arc = Math.PI * r / 2, L = 2 * sw + 2 * sh + 4 * arc;
+    var d = ((u % 1) + 1) % 1 * L;
+    var segs = [
+      function(t){ return [-w / 2 + r + t, -h / 2]; }, sw,
+      function(t){ var a = -Math.PI / 2 + t / r; return [w / 2 - r + Math.cos(a) * r, -h / 2 + r + Math.sin(a) * r]; }, arc,
+      function(t){ return [w / 2, -h / 2 + r + t]; }, sh,
+      function(t){ var a = t / r; return [w / 2 - r + Math.cos(a) * r, h / 2 - r + Math.sin(a) * r]; }, arc,
+      function(t){ return [w / 2 - r - t, h / 2]; }, sw,
+      function(t){ var a = Math.PI / 2 + t / r; return [-w / 2 + r + Math.cos(a) * r, h / 2 - r + Math.sin(a) * r]; }, arc,
+      function(t){ return [-w / 2, h / 2 - r - t]; }, sh,
+      function(t){ var a = Math.PI + t / r; return [-w / 2 + r + Math.cos(a) * r, -h / 2 + r + Math.sin(a) * r]; }, arc,
+    ];
+    for (var i = 0; i < segs.length; i += 2) { if (d <= segs[i + 1]) return segs[i](d); d -= segs[i + 1]; }
+    return [-w / 2 + r, -h / 2];
+  }
+
+  var motes = [];
+  for (var mi = 0; mi < 46; mi++) motes.push({ x: Math.random(), y: Math.random(), v: 0.018 + Math.random() * 0.03, r: 0.6 + Math.random() * 1.8, ph: Math.random() * 6.28, c: mi % 3 });
+  var bursts = [];   // { t0, parts:[{a,v,r,c}] }
+  var glints = [];   // { t0 }
+  function burst(){
+    var parts = [];
+    for (var i = 0; i < 64; i++) parts.push({ a: Math.random() * 6.283, v: 0.35 + Math.random() * 0.85, r: 1 + Math.random() * 2.6, c: i % 3, spin: Math.random() * 6 });
+    bursts.push({ t0: performance.now(), parts: parts });
+  }
+  function glint(){ glints.push({ t0: performance.now() }); }
+  var nextAutoGlint = performance.now() + 5000;
+
+  function star(ctx, x, y, r){
+    ctx.beginPath();
+    ctx.moveTo(x, y - r * 2.2); ctx.quadraticCurveTo(x, y, x + r * 2.2, y); ctx.quadraticCurveTo(x, y, x, y + r * 2.2); ctx.quadraticCurveTo(x, y, x - r * 2.2, y); ctx.quadraticCurveTo(x, y, x, y - r * 2.2);
+    ctx.fill();
+  }
+
+  function frame(t){
+    requestAnimationFrame(frame);
+    var sec = t / 1000;
+    var g0 = geo();
+    dots.style.top = Math.round(g0.cy + g0.h / 2 + 64 * (g0.h / 520.8)) + 'px';
+    if (afOn && n > 1) { bar.style.opacity = '1'; barFill.style.width = Math.min(100, (t - afLast) / AUTO_MS * 100) + '%'; }
+    else bar.style.opacity = '0';
+    if (!SHOWCASE) return; // 沒開展示效果：不飄浮、canvas 從來沒畫過，不用每幀清
+    // 卡片緩慢飄浮（整張 iframe 一起），效果圖層用同一個位移
+    var floatY = Math.sin(sec * 2 * Math.PI / 6) * 6;
+    var floatR = Math.sin(sec * 2 * Math.PI / 9) * 0.45;
+    for (var ei = 0; ei < n; ei++) {
+      var f = els[ei].firstElementChild;
+      if (f) f.style.transform = 'translateY(' + floatY.toFixed(2) + 'px) rotate(' + floatR.toFixed(3) + 'deg)';
+    }
+    var g = g0, cx = g.cx, cy = g.cy + floatY, w = g.w, h = g.h, s = h / 520.8;
+
+    bctx.setTransform(dpr, 0, 0, dpr, 0, 0); bctx.clearRect(0, 0, W, H);
+    fctx.setTransform(dpr, 0, 0, dpr, 0, 0); fctx.clearRect(0, 0, W, H);
+    var C = currentCols(t);
+    var squash = Math.max(0.04, Math.abs(Math.cos(angle * Math.PI / 180)));
+    // 光芒／光暈的範圍：以卡片中心為圓心、剛好不碰到視窗邊緣的橢圓
+    var ex = Math.max(10, Math.min(h * 0.9, cx - 4, W - cx - 4)), ey = Math.max(10, Math.min(h * 0.9, cy - 4, H - cy - 4));
+
+    // --- 後面：光芒 ---
+    bctx.save();
+    bctx.globalCompositeOperation = 'lighter';
+    bctx.translate(cx, cy);
+    bctx.scale(ex, ey);
+    bctx.rotate(sec * 0.12);
+    var rays = 12, len = 1;
+    for (var ri = 0; ri < rays; ri++) {
+      var a0 = ri / rays * Math.PI * 2, spread = 0.09;
+      var gr = bctx.createLinearGradient(0, 0, Math.cos(a0) * len, Math.sin(a0) * len);
+      gr.addColorStop(0, rgba(C[ri % 2 ? 2 : 0], 0.16)); gr.addColorStop(1, rgba(C[ri % 2 ? 2 : 0], 0));
+      bctx.fillStyle = gr;
+      bctx.beginPath(); bctx.moveTo(0, 0);
+      bctx.lineTo(Math.cos(a0 - spread) * len, Math.sin(a0 - spread) * len);
+      bctx.lineTo(Math.cos(a0 + spread) * len, Math.sin(a0 + spread) * len);
+      bctx.closePath(); bctx.fill();
+    }
+    bctx.restore();
+    // --- 後面：呼吸光暈 ---
+    var breath = 0.78 + 0.22 * Math.sin(sec * 2 * Math.PI / 3.2);
+    bctx.save();
+    bctx.translate(cx, cy); bctx.scale(ex, ey);
+    var ag = bctx.createRadialGradient(0, 0, 0.2, 0, 0, 1);
+    ag.addColorStop(0, rgba(C[0], 0.4 * breath)); ag.addColorStop(0.5, rgba(C[1], 0.17 * breath)); ag.addColorStop(1, rgba(C[1], 0));
+    bctx.fillStyle = ag; bctx.beginPath(); bctx.arc(0, 0, 1, 0, 6.283); bctx.fill();
+    bctx.restore();
+    // --- 後面：牌堆（下一張起算的 1～3 張牌背，錯開一點點） ---
+    var depth = Math.min(3, n - 1), fan = [[-9, 7, -4.2], [10, 11, 3.6], [-3, 15, -7.2]];
+    for (var k = depth; k >= 1; k--) {
+      var pc = paletteOf((cur + k) % n), fk = fan[k - 1];
+      bctx.save();
+      bctx.translate(cx + fk[0] * s, g.cy + fk[1] * s + floatY * 0.4);
+      bctx.rotate(fk[2] * Math.PI / 180);
+      roundRectPath(bctx, -w / 2, -h / 2, w, h, 20 * s);
+      var sg = bctx.createLinearGradient(0, -h / 2, 0, h / 2);
+      sg.addColorStop(0, 'rgba(22,24,38,.92)'); sg.addColorStop(1, 'rgba(8,9,16,.92)');
+      bctx.fillStyle = sg; bctx.fill();
+      bctx.lineWidth = 2.2 * s; bctx.strokeStyle = rgba(pc[0], 0.75); bctx.stroke();
+      bctx.shadowColor = rgba(pc[1], 0.8); bctx.shadowBlur = 12 * s; bctx.stroke();
+      bctx.restore();
+    }
+    // --- 後面：上升光點 ---
+    bctx.save(); bctx.globalCompositeOperation = 'lighter';
+    for (var pi = 0; pi < motes.length; pi++) {
+      var p = motes[pi];
+      p.y -= p.v / 60; if (p.y < -0.05) { p.y = 1.05; p.x = Math.random(); }
+      var px = cx + (p.x - 0.5) * w * 1.6 + Math.sin(sec * 0.7 + p.ph) * 10 * s, py = cy + (p.y - 0.5) * h * 1.35;
+      var tw = 0.35 + 0.65 * Math.abs(Math.sin(sec * 1.7 + p.ph));
+      bctx.fillStyle = rgba(C[p.c], 0.55 * tw);
+      bctx.beginPath(); bctx.arc(px, py, p.r * s * 1.3, 0, 6.283); bctx.fill();
+    }
+    bctx.restore();
+
+    // --- 前面：沿卡緣繞行的兩道光（翻面時跟著變窄） ---
+    fctx.save(); fctx.globalCompositeOperation = 'lighter';
+    fctx.translate(cx, cy); fctx.scale(squash, 1);
+    fctx.lineCap = 'round';
+    for (var ci = 0; ci < 2; ci++) {
+      var base = sec / 7 + ci * 0.5, TRAIL = 36, prev = perimeterPoint(w, h, 20 * s, base);
+      var cc = C[ci ? 2 : 0];
+      // 連續的彗星尾巴：由頭到尾越來越細、越來越淡（lighter 疊加＝發光感）
+      for (var tr = 1; tr <= TRAIL; tr++) {
+        var pt = perimeterPoint(w, h, 20 * s, base - tr * 0.0028), aa = 1 - tr / TRAIL;
+        fctx.strokeStyle = rgba(cc, 0.75 * aa);
+        fctx.lineWidth = (3.4 * aa + 0.4) * s;
+        fctx.beginPath(); fctx.moveTo(prev[0], prev[1]); fctx.lineTo(pt[0], pt[1]); fctx.stroke();
+        prev = pt;
+      }
+      // 光頭：白色核心＋主題色光暈
+      var hp = perimeterPoint(w, h, 20 * s, base);
+      var hg = fctx.createRadialGradient(hp[0], hp[1], 0, hp[0], hp[1], 16 * s);
+      hg.addColorStop(0, 'rgba(255,255,255,.95)'); hg.addColorStop(0.25, rgba(cc, 0.6)); hg.addColorStop(1, rgba(cc, 0));
+      fctx.fillStyle = hg; fctx.beginPath(); fctx.arc(hp[0], hp[1], 16 * s, 0, 6.283); fctx.fill();
+    }
+    fctx.restore();
+
+    // --- 前面：換卡閃光＋光環＋星芒 ---
+    for (var bi = bursts.length - 1; bi >= 0; bi--) {
+      var B = bursts[bi], e = (t - B.t0) / 1000;
+      if (e > 1.2) { bursts.splice(bi, 1); continue; }
+      fctx.save(); fctx.globalCompositeOperation = 'lighter';
+      if (e < 0.35) {
+        var fa = 1 - e / 0.35;
+        fctx.save(); fctx.translate(cx, cy); fctx.scale(ex, ey);
+        var fg = fctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+        fg.addColorStop(0, 'rgba(255,255,255,' + (0.55 * fa) + ')'); fg.addColorStop(0.4, rgba(C[0], 0.35 * fa)); fg.addColorStop(1, rgba(C[0], 0));
+        fctx.fillStyle = fg; fctx.beginPath(); fctx.arc(0, 0, 1, 0, 6.283); fctx.fill();
+        fctx.restore();
+      }
+      if (e < 0.8) {
+        var re = e / 0.8, rr = Math.min(ey - 6, h * (0.32 + 0.55 * (1 - Math.pow(1 - re, 3))));
+        fctx.lineWidth = (6 * (1 - re) + 1) * s; fctx.strokeStyle = rgba(C[2], 0.8 * (1 - re));
+        fctx.beginPath(); fctx.ellipse(cx, cy, Math.min(ex - 6, rr * 0.78), rr, 0, 0, 6.283); fctx.stroke();
+      }
+      for (var qi = 0; qi < B.parts.length; qi++) {
+        var q = B.parts[qi], dist = (1 - Math.pow(1 - Math.min(1, e / 1.1), 2)) * q.v * h * 0.75;
+        var qx = cx + Math.cos(q.a) * dist * 0.8, qy = cy + Math.sin(q.a) * dist;
+        fctx.fillStyle = rgba(q.c === 0 ? [255, 255, 255] : C[q.c], Math.max(0, 1 - e / 1.2));
+        star(fctx, qx, qy, q.r * s * (1 - e / 1.6));
+      }
+      fctx.restore();
+    }
+    // --- 前面：掃過卡面的光澤（換卡落定後一次，之後每 7 秒一次） ---
+    if (t > nextAutoGlint) { glint(); nextAutoGlint = t + 7000; }
+    for (var gi = glints.length - 1; gi >= 0; gi--) {
+      var G = glints[gi], ge = (t - G.t0) / 750;
+      if (ge > 1) { glints.splice(gi, 1); continue; }
+      fctx.save();
+      fctx.translate(cx, cy); fctx.scale(squash, 1);
+      roundRectPath(fctx, -w / 2, -h / 2, w, h, 20 * s); fctx.clip();
+      fctx.globalCompositeOperation = 'lighter';
+      var gx = -w * 0.9 + ge * w * 1.8;
+      var lg = fctx.createLinearGradient(gx - 70 * s, -h / 2, gx + 70 * s, h / 2);
+      lg.addColorStop(0, 'rgba(255,255,255,0)'); lg.addColorStop(0.5, 'rgba(255,255,255,' + (0.28 * Math.sin(ge * Math.PI)) + ')'); lg.addColorStop(1, 'rgba(255,255,255,0)');
+      fctx.fillStyle = lg; fctx.fillRect(-w / 2, -h / 2, w, h);
+      fctx.restore();
+    }
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>`;
 }
 
 // ==================== 多卡合一模式 ====================
@@ -1681,8 +2228,15 @@ let lastExportPath = null;
 let exportProgress = null;   // { label, frac }：目前匯出的進度（再按一次快捷鍵時，提示「還沒結束」要帶上進度）
 let exportStatusLine = null; // 系統匣選單最上方的「匯出中 43%」那一行；沒在匯出時是 null
 
+// 牌組模式：舞台頁每次換卡都回報目前是第幾張（匯出分享＝匯出目前正在看的這張）。
+let deckCur = 0;
+ipcMain.on('deck-current', (_event, idx) => {
+  if (IS_DECK && Number.isInteger(idx) && idx >= 0 && idx < DECK.length) deckCur = idx;
+});
+
 function exportCardList() {
-  return Array.isArray(MULTI_CARDS) && MULTI_CARDS.length > 0 ? MULTI_CARDS : [{ file: CARD_FILE }];
+  if (Array.isArray(MULTI_CARDS) && MULTI_CARDS.length > 0) return MULTI_CARDS;
+  return [{ file: IS_DECK ? DECK[deckCur] : CARD_FILE }];
 }
 
 function cardDisplayName(file) {
@@ -1808,13 +2362,29 @@ ipcMain.on('toggle-state', (_event, kind, on, why) => {
 let autoFlipOn = false;
 function toggleAutoFlipCmd() {
   if (!win || win.isDestroyed()) return;
+  if (IS_DECK) {
+    // 牌組：開關在舞台頁裡（載入完成前也可能被切換），以舞台回報的實際狀態為準
+    win.webContents.executeJavaScript('window.toggleAutoFlip ? window.toggleAutoFlip() : null').then((on) => {
+      if (typeof on !== 'boolean') { showPill(`⏳ 牌組還在載入\n稍後再按 ${AUTOFLIP_KEY}`, '#ffd166'); return; }
+      autoFlipOn = on;
+      const what = autoFlipLabel();
+      showPill(on ? `🔄 ${what}：已開啟\n${AUTOFLIP_KEY} 關閉` : `🔄 ${what}：已關閉\n${AUTOFLIP_KEY} 開啟`, on ? '#4ade80' : '#ffd166');
+    }).catch(() => {});
+    return;
+  }
   if (Array.isArray(MULTI_CARDS) && MULTI_CARDS.length > 0) {
     win.webContents.send('autoflip-toggle');
   } else {
     win.webContents.executeJavaScript('window.toggleAutoFlip && window.toggleAutoFlip()').catch(() => {});
   }
   autoFlipOn = !autoFlipOn;
-  showPill(autoFlipOn ? `🔄 每秒自動翻面：已開啟\n${AUTOFLIP_KEY} 關閉` : `🔄 每秒自動翻面：已關閉\n${AUTOFLIP_KEY} 開啟`, autoFlipOn ? '#4ade80' : '#ffd166');
+  const what = autoFlipLabel();
+  showPill(autoFlipOn ? `🔄 ${what}：已開啟\n${AUTOFLIP_KEY} 關閉` : `🔄 ${what}：已關閉\n${AUTOFLIP_KEY} 開啟`, autoFlipOn ? '#4ade80' : '#ffd166');
+}
+
+// F4 的名稱：牌組模式是「自動翻頁（每 N 秒）」（牌組舞台計時），其他模式是卡片內建的「每秒自動翻面」。
+function autoFlipLabel() {
+  return IS_DECK ? `自動翻頁（每 ${DECK_INTERVAL_S} 秒）` : '每秒自動翻面';
 }
 
 // 時鐘式循環的補充說明：剛好 5 張＝「中央＋四角」，第 1 張不動、其餘四張繞它轉（見 computeCycleConfigCentre()）。
@@ -1830,12 +2400,14 @@ function showShortcutHelp() {
     `${TOGGLE_KEY}　切換 互動／點擊穿透`,
     ...(CYCLE_MODE ? [`${CYCLE_KEY}　時鐘式循環${cycleNote()}`] : []),
     ...(multi ? [`${GESTURE_KEY}　手勢辨識　${SKELETON_KEY}　手部骨架`] : []),
-    `${AUTOFLIP_KEY}　每秒自動翻面`,
+    `${AUTOFLIP_KEY}　${autoFlipLabel()}`,
+    ...(IS_DECK ? [`牌組 ${DECK.length} 張：雙擊翻到卡背，翻回正面＝換下一張`] : []),
     `${SKILL_KEY}　技能演出`,
     `${RARITY_KEY}　切換稀有度`,
     `${MUTE_KEY}　音效靜音`,
     `${EXPORT_KEY}　匯出分享（${EXPORT_FORMAT.toUpperCase()}）${multi ? '＝游標所在的卡' : ''}`,
     ...(multi ? [`${EXPORT_LAYOUT_KEY}　匯出整個版面（所有卡一起）`] : []),
+    ...(IS_DECK ? [`${EXPORT_LAYOUT_KEY}　匯出牌組展示動畫（每張各出現一次）`] : []),
     `${ZOOM_IN_KEY} / ${ZOOM_OUT_KEY}　放大／縮小`,
     `${OPACITY_UP_KEY} / ${OPACITY_DOWN_KEY}　更不透明／更透明`,
     `${RESET_KEY}　重設位置　${QUIT_KEY}　結束`,
@@ -1987,6 +2559,68 @@ async function runExportStage(format, kind) {
   }
 }
 
+// 牌組「展示動畫」匯出：每張卡各出現一次（正面、卡背各停留一個翻頁間隔），畫面跟桌面上的牌組一模一樣——
+// 同一份舞台頁（buildDeckHtml：同樣的展示效果、翻頁間隔），每張卡注入同樣的腳本（環境星光設定也一樣）。
+// 以 100% 大小錄（不受目前的縮放／透明度影響）。錄製是慢動作進行，實際要花「影片長度 × 4」左右的時間。
+async function runExportDeck(format) {
+  if (!IS_DECK) return;
+  if (cardExporter.isBusy()) {
+    const cur = exportProgress ? `${exportProgress.label}　目前 ${Math.round(exportProgress.frac * 100)}%` : '請稍等一下';
+    notify('匯出進行中', '上一個匯出還沒結束，請稍等一下。');
+    showToast({ state: 'info', title: '⏳ 上一個匯出還沒結束', sub: cur, holdMs: 3000 });
+    return;
+  }
+  const fmt = { label: { webm: 'WebM 影片', gif: 'GIF 動圖', png: 'PNG 圖片' }[format] || format }; // 牌組動畫不是「旋轉一圈」，不用 FORMATS 的名稱
+  const n = DECK.length;
+  const secs = n * 2 * DECK_INTERVAL_S;
+  const label = format === 'png' ? `牌組展示（${n} 張）` : `牌組展示動畫（${n} 張・${secs} 秒）`;
+  const baseTip = `${pkg.name}\n${trayLabel()}`;
+  const paint = (state, extra) => showToast(Object.assign({ state, idx: null }, extra));
+  let lastAt = 0;
+  let lastPct = -10;
+  exportProgress = { label, frac: 0, idx: null };
+  exportStatusLine = `📤 匯出中：${label} 0%`;
+  updateTrayMenu();
+  const eta = format === 'png' ? '' : `（慢動作錄製，約 ${Math.ceil((secs * (format === 'gif' ? 2.5 : 4) + 15) / 60)} 分鐘）`;
+  notify('開始匯出', `${label} → ${fmt.label}${eta}`);
+  paint('progress', { title: `📤 匯出中：${label}`, sub: `${fmt.label}${eta}`, frac: 0 });
+  try {
+    const r = await cardExporter.exportDeck({
+      stageHtml: buildDeckHtml(DECK, 1, 1, false, DECK_INTERVAL_S, DECK_SHOWCASE),
+      frameScripts: [TRANSPARENT_CSS_JS, INJECTED_SCRIPT, DECK_FRAME_SCRIPT],
+      count: n,
+      intervalSeconds: DECK_INTERVAL_S,
+      format,
+      outDir: EXPORT_DIR,
+      gifScale: GIF_SCALE,
+      onStatus: (msg, frac) => {
+        const f = typeof frac === 'number' ? frac : 0;
+        const pct = Math.round(f * 100);
+        exportProgress = { label, frac: f, idx: null };
+        if (tray && !tray.isDestroyed()) tray.setToolTip(`${baseTip}\n📤 ${label}：${msg} ${pct}%`);
+        const now = Date.now();
+        if (now - lastAt > 250) { lastAt = now; paint('progress', { title: `📤 匯出中：${label}`, sub: `${msg} · ${pct}%`, frac: f }); }
+        if (pct >= lastPct + 10) { lastPct = pct; exportStatusLine = `📤 匯出中：${label} ${pct}%`; updateTrayMenu(); }
+      },
+    });
+    lastExportPath = r.path;
+    let extra = '';
+    if (r.png) { clipboard.writeImage(nativeImage.createFromBuffer(r.png)); extra = '，圖片已複製到剪貼簿'; }
+    const size = `${(r.bytes / 1048576).toFixed(1)} MB${extra}`;
+    notify('匯出完成', `${path.basename(r.path)}（${size}）\n點這則通知打開所在資料夾`);
+    paint('done', { title: `✅ 匯出完成：${label}`, sub: `${path.basename(r.path)}（${size}）\n已存到 ${path.dirname(r.path)}\n${EXPORT_LAYOUT_KEY} 可再次匯出牌組展示動畫`, frac: 1, holdMs: 9000 });
+  } catch (e) {
+    notify('匯出失敗', cardExporter.errText(e));
+    paint('error', { title: `❌ 匯出失敗：${label}`, sub: cardExporter.errText(e), holdMs: 12000 });
+    console.warn(`${LOG_TAG} 匯出失敗：`, e);
+  } finally {
+    exportProgress = null;
+    exportStatusLine = null;
+    if (tray && !tray.isDestroyed()) tray.setToolTip(baseTip);
+    updateTrayMenu();
+  }
+}
+
 // 快捷鍵：單卡＝這張卡；多卡＝游標所在的卡片（用 stage 頁面裡每一格的實際位置判斷，不動 stage 程式碼）。
 async function exportByHotkey() {
   if (!win || win.isDestroyed()) return;
@@ -2021,6 +2655,15 @@ function exportMenuItems() {
   const multi = cards.length > 1 || (Array.isArray(MULTI_CARDS) && MULTI_CARDS.length > 0);
   return Object.keys(cardExporter.FORMATS).map((format) => {
     const label = `${cardExporter.FORMATS[format].label}${format === EXPORT_FORMAT ? `（${EXPORT_KEY}）` : ''}`;
+    if (IS_DECK) {
+      return {
+        label,
+        submenu: [
+          { label: '目前顯示的這張', click: () => runExport(format, [0]) },
+          { label: `🎬 牌組展示${format === 'png' ? '（靜態畫面）' : `動畫（${DECK.length} 張各出現一次，${DECK.length * 2 * DECK_INTERVAL_S} 秒）`}${format === EXPORT_FORMAT ? `（${EXPORT_LAYOUT_KEY}）` : ''}`, click: () => runExportDeck(format) },
+        ],
+      };
+    }
     if (!multi) return { label, click: () => runExport(format, [0]) };
     return {
       label,
@@ -2052,6 +2695,7 @@ function trayLabel() {
   // 開好幾個 exe 時分得清楚系統匣裡一排小圖示各自是誰（Windows 系統匣本身
   // 不會顯示文字，只能靠 hover 提示或選單內容分辨）。
   const isMulti = Array.isArray(MULTI_CARDS) && MULTI_CARDS.length > 0;
+  if (IS_DECK) return `牌組（${DECK.length} 張）：${DECK.map((f) => f.replace(/^cards\//, '')).join('、')}`;
   return isMulti ? `多卡：${MULTI_CARDS.map((c) => c.file.replace(/^cards\//, '')).join('、')}` : (CARD_FILE || pkg.name);
 }
 
@@ -2100,11 +2744,11 @@ function updateTrayMenu() {
     // 任何張數的多卡合一、單卡都能用（不像時鐘循環要 3 張以上）——沒支援這個功能
     // 的（自己另外加的）卡片點了也只是沒反應，不用另外判斷卡片種類。
     {
-      label: `🔄 開始/暫停 每秒自動翻面循環 (${AUTOFLIP_KEY})`,
+      label: `🔄 開始/暫停 ${IS_DECK ? autoFlipLabel() : '每秒自動翻面循環'} (${AUTOFLIP_KEY})`,
       click: toggleAutoFlipCmd,
     },
     { type: 'separator' },
-    { label: `── 📤 匯出分享（${EXPORT_KEY}＝匯出 ${EXPORT_FORMAT.toUpperCase()}${Array.isArray(MULTI_CARDS) && MULTI_CARDS.length > 0 ? `，多卡＝游標所在的卡；${EXPORT_LAYOUT_KEY}＝整個版面` : ''}）──`, enabled: false },
+    { label: `── 📤 匯出分享（${EXPORT_KEY}＝匯出 ${EXPORT_FORMAT.toUpperCase()}${Array.isArray(MULTI_CARDS) && MULTI_CARDS.length > 0 ? `，多卡＝游標所在的卡；${EXPORT_LAYOUT_KEY}＝整個版面` : IS_DECK ? `＝目前這張；${EXPORT_LAYOUT_KEY}＝牌組展示動畫` : ''}）──`, enabled: false },
     { label: `📤 匯出分享`, submenu: exportMenuItems() },
     { label: '⌨️ 顯示快捷鍵提示（畫面上 10 秒）', click: showShortcutHelp },
     { type: 'separator' },
@@ -2165,10 +2809,12 @@ app.whenReady().then(() => {
   const isMulti = Array.isArray(MULTI_CARDS) && MULTI_CARDS.length > 0;
   if (isMulti) {
     createMultiWindow(MULTI_CARDS);
-  } else if (CARD_FILE) {
-    createSingleWindow();
+  } else if (IS_DECK || CARD_FILE) {
+    createSingleWindow(); // 牌組模式也走單卡視窗（見 createSingleWindow() 裡的 IS_DECK 分支）
   } else {
-    throw new Error('package.json 必須有 cardFile（單卡）或 cards（多卡）其中一個');
+    console.error(`${LOG_TAG} 設定錯誤：package.json 必須有 cardFile（單卡）、deck（牌組）或 cards（多卡）其中一個`);
+    app.exit(1);
+    return;
   }
 
   // 系統匣圖示在快捷鍵註冊「之前」就先建立——不管下面 TOGGLE_KEY/QUIT_KEY
@@ -2240,9 +2886,9 @@ app.whenReady().then(() => {
     if (!ok) console.warn(`${LOG_TAG} ${EXPORT_KEY} 全域快捷鍵註冊失敗（可能跟其他程式衝突或格式不對；可在 package.json 的 exportKey 改一個沒被占用的鍵，或直接用系統匣選單）`);
   }
 
-  if (isMulti) {
+  if (isMulti || IS_DECK) {
     let ok = false;
-    try { ok = globalShortcut.register(EXPORT_LAYOUT_KEY, () => runExportStage(EXPORT_FORMAT, 'layout')); } catch (e) { /* 不合法的按鍵字串 */ }
+    try { ok = globalShortcut.register(EXPORT_LAYOUT_KEY, () => (IS_DECK ? runExportDeck(EXPORT_FORMAT) : runExportStage(EXPORT_FORMAT, 'layout'))); } catch (e) { /* 不合法的按鍵字串 */ }
     if (!ok) console.warn(`${LOG_TAG} ${EXPORT_LAYOUT_KEY} 全域快捷鍵註冊失敗（可能跟其他程式衝突或格式不對；可在 package.json 的 exportLayoutKey 改一個沒被占用的鍵，或直接用系統匣選單）`);
   }
 
@@ -2252,7 +2898,7 @@ app.whenReady().then(() => {
     if (!ok) console.warn(`${LOG_TAG} ${key} 全域快捷鍵註冊失敗（可能跟其他程式衝突或格式不對；可在 package.json 的 ${cfgName} 改一個沒被占用的鍵，或直接用系統匣選單）`);
   }
 
-  console.log(`${LOG_TAG} 桌面掛件已啟動（${isMulti ? `多卡：${MULTI_CARDS.map((c) => c.file).join('、')}` : CARD_FILE}）`);
+  console.log(`${LOG_TAG} 桌面掛件已啟動（${isMulti ? `多卡：${MULTI_CARDS.map((c) => c.file).join('、')}` : IS_DECK ? `牌組：${DECK.join('、')}` : CARD_FILE}）`);
   console.log(`${LOG_TAG}   ${TOGGLE_KEY}  切換 互動/點擊穿透 模式`);
   console.log(`${LOG_TAG}   在卡片上按住滑鼠右鍵拖曳移動位置`);
   if (CYCLE_MODE) console.log(`${LOG_TAG}   ${CYCLE_KEY}  開始/暫停 時鐘式循環${cycleNote()}（3 張以上、順時針；拖曳任何一格也會自動暫停）`);
@@ -2261,7 +2907,7 @@ app.whenReady().then(() => {
     console.log(`${LOG_TAG}   ${SKELETON_KEY}  開啟/關閉 手部骨架視覺效果`);
   }
   console.log(`${LOG_TAG}   ${RESET_KEY}  重設卡片位置（會先跳確認視窗）`);
-  console.log(`${LOG_TAG}   ${AUTOFLIP_KEY}  開始/暫停 每秒自動翻面循環`);
+  console.log(`${LOG_TAG}   ${AUTOFLIP_KEY}  開始/暫停 ${IS_DECK ? `${autoFlipLabel()}；開啟時${DECK_AUTO_FLIP ? '自動開始' : '不自動開始'}` : '每秒自動翻面循環'}`);
   console.log(`${LOG_TAG}   環境星光（卡面小星星）：${AMBIENT_STARS ? '開' : '關（以前的樣子；builder-gui 打包時可勾選開啟）'}`);
   console.log(`${LOG_TAG}   開機自動啟動：${isLaunchAtLoginEnabled() ? '已開啟' : '未開啟'}（系統匣選單可切換）`);
   console.log(`${LOG_TAG}   滾輪縮放卡片、Alt＋滾輪調透明度、滑鼠中鍵重設（設定會跟位置一起存檔）`);
@@ -2271,6 +2917,7 @@ app.whenReady().then(() => {
   console.log(`${LOG_TAG}   ${MUTE_KEY}  音效靜音／取消靜音`);
   console.log(`${LOG_TAG}   ${EXPORT_KEY}  匯出分享（${cardExporter.FORMATS[EXPORT_FORMAT].label}）→ ${EXPORT_DIR}；系統匣選單可選 PNG／WebM／GIF`);
   if (isMulti) console.log(`${LOG_TAG}   ${EXPORT_LAYOUT_KEY}  匯出整個版面（所有卡一起，${cardExporter.FORMATS[EXPORT_FORMAT].label}）；系統匣選單「匯出分享」另有「時鐘轉圈動畫」`);
+  if (IS_DECK) console.log(`${LOG_TAG}   ${EXPORT_LAYOUT_KEY}  匯出牌組展示動畫（${DECK.length} 張各出現一次、${DECK.length * 2 * DECK_INTERVAL_S} 秒，${EXPORT_FORMAT.toUpperCase()}）；${EXPORT_KEY} 匯出目前這張`);
   console.log(`${LOG_TAG}   ${QUIT_KEY} 結束程式`);
 });
 

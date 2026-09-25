@@ -471,5 +471,178 @@ async function exportStage(o) {
   }
 }
 
+// ==================== 牌組：展示動畫（每張卡各出現一次） ====================
+// 跟桌面上看到的一模一樣：載入同一份牌組舞台頁（main.js 的 buildDeckHtml，同樣的展示效果／翻頁間隔），每張卡的
+// iframe 也注入跟桌面掛件相同的腳本（呼叫端傳進來）。舞台的動畫是「即時」的（計時器、CSS 補間、每幀繪製的光效、
+// 卡片之間互傳訊息），不能像單張匯出那樣一格一格指定角度——改成「整體慢動作」再邊播邊截圖：
+//   - JS 時鐘（performance.now／Date.now／setTimeout／setInterval／rAF 回傳的時間）在每個 frame 建立時就被換成
+//     RATE 倍速（Page.addScriptToEvaluateOnNewDocument，iframe 也會套用）；
+//   - CSS 補間／動畫用 Animation.setPlaybackRate(RATE)（整頁含 iframe）。rAF 的原生時間戳本來就會跟著這個倍速變慢，
+//     所以 rAF 包裝直接回傳「變慢後的 performance.now()」，光效與計時器才在同一個時間基準上。
+//   - 慢動作下連續截圖，依真實時間換算回正常速度的時間軸，每一個輸出影格取時間最接近的那張截圖（邊截邊送，不佔記憶體）。
+//   ⚠️ 試過 Emulation.setVirtualTimePolicy：只控制得到 JS 時鐘，rAF 時間戳與 CSS 補間仍照真實時間走，兩邊對不上（實測）。
+// 內容：從第一張正面開始（開場閃光），每張卡正面、卡背各停留一個翻頁間隔，到最後一張卡背結束——每張卡出現一次。
+const DECK_VIEW_W = 560;
+const DECK_VIEW_H = 820;
+
+function warpScript(rate) {
+  return `(function(){
+  if (window.__expWarp) return; window.__expWarp = ${rate};
+  var R = ${rate}, P = performance, rp = P.now.bind(P), rd = Date.now, p0 = rp(), d0 = rd();
+  P.now = function(){ return p0 + (rp() - p0) * R; };
+  Date.now = function(){ return d0 + (rd() - d0) * R; };
+  var st = window.setTimeout, si = window.setInterval, raf = window.requestAnimationFrame;
+  window.setTimeout = function(f, d){ var a = Array.prototype.slice.call(arguments, 2); return st.apply(window, [f, (Number(d) || 0) / R].concat(a)); };
+  window.setInterval = function(f, d){ var a = Array.prototype.slice.call(arguments, 2); return si.apply(window, [f, (Number(d) || 0) / R].concat(a)); };
+  window.requestAnimationFrame = function(cb){ return raf.call(window, function(){ cb(P.now()); }); };
+})();`;
+}
+
+/**
+ * 匯出牌組展示動畫。
+ * @param {object} o
+ * @param {string} o.stageHtml     牌組舞台頁（buildDeckHtml，autoFlip 要是 false——由這裡在準備好後才開始翻頁）
+ * @param {string[]} o.frameScripts 每張卡 iframe 載入完要執行的腳本（跟桌面掛件注入的相同）
+ * @param {number} o.count         牌組張數
+ * @param {number} o.intervalSeconds 翻頁間隔（秒）
+ * @param {'png'|'webm'|'gif'} o.format
+ * @param {string} o.outDir
+ * @param {(msg:string, frac?:number)=>void} [o.onStatus]
+ */
+async function exportDeck(o) {
+  if (busy) throw new Error('上一個匯出還沒結束');
+  const spec = FORMATS[o.format];
+  if (!spec) throw new Error(`不支援的匯出格式：${o.format}`);
+  const n = Math.max(1, Number(o.count) || 1);
+  const intervalMs = Math.max(500, (Number(o.intervalSeconds) || 2) * 1000);
+  busy = true;
+  const status = o.onStatus || (() => {});
+  const wins = [];
+  let cdp = null;
+  let stageFile = null;
+  try {
+    // 影片 30 fps、GIF 12.5 fps（格間隔 8/100 秒，播放速度才準）；慢動作倍率要讓「兩張截圖之間的頁面時間」小於一格
+    const fps = o.format === 'gif' ? 12.5 : 30;
+    const RATE = o.format === 'gif' ? 0.4 : 0.25;
+    const dsf = o.format === 'gif' ? Math.min(gifScaleOf(o), 0.8) : (o.format === 'png' ? 2 : 1.5);
+    const outW = even(DECK_VIEW_W * dsf);
+    const outH = even(DECK_VIEW_H * dsf);
+    const totalMs = n * 2 * intervalMs;
+    const frames = o.format === 'png' ? 1 : Math.max(8, Math.round((totalMs / 1000) * fps));
+
+    const win = new BrowserWindow({
+      x: OFFSCREEN, y: OFFSCREEN, width: DECK_VIEW_W, height: DECK_VIEW_H, useContentSize: true,
+      show: true, frame: false, transparent: true, resizable: false, focusable: false, skipTaskbar: true, hasShadow: false,
+      webPreferences: { backgroundThrottling: false, contextIsolation: true, autoplayPolicy: 'no-user-gesture-required' },
+    });
+    wins.push(win);
+    const wc = win.webContents;
+    wc.setAudioMuted(true);
+    await wc.loadURL('about:blank'); // 見 exportCard()：還沒載入任何頁面就掛 debugger 會讓主程序無聲崩潰
+    cdp = wc.debugger;
+    cdp.attach('1.3');
+    const send = (method, params) => cdp.sendCommand(method, params || {});
+    await send('Page.enable');
+    await send('Emulation.setDeviceMetricsOverride', { width: DECK_VIEW_W, height: DECK_VIEW_H, deviceScaleFactor: dsf, mobile: false });
+    await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] });
+    if (o.format === 'png') await send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
+    // 每個 frame 一建立就換成慢動作時鐘；卡片 iframe 載入完再執行桌面掛件的注入腳本（匯出畫面不要操作提示文字）
+    const frameBoot = `if (window.top !== window.self) window.addEventListener('load', function(){
+      ${(o.frameScripts || []).join(';\n')};
+      var st = document.createElement('style'); st.textContent = '.hint{ visibility:hidden !important; }'; (document.head || document.documentElement).appendChild(st);
+    });`;
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: warpScript(RATE) + '\n' + frameBoot });
+    await send('Animation.enable');
+    await send('Animation.setPlaybackRate', { playbackRate: RATE });
+
+    status('載入牌組…', 0.02);
+    stageFile = path.join(app.getPath('temp'), `phantom-deck-export-${process.pid}-${Date.now()}.html`);
+    fs.writeFileSync(stageFile, o.stageHtml, 'utf8');
+    await wc.loadURL(pathToFileURL(stageFile).href);
+    if (wc.getZoomFactor() !== 1) wc.setZoomFactor(1);
+    await send('Animation.setPlaybackRate', { playbackRate: RATE });
+    // 等每張卡都載入、注入完（牌組腳本會在 iframe 裡設 __phantomDeckInit），字型就緒
+    const deadline = Date.now() + 30000;
+    for (;;) {
+      const ok = await wc.executeJavaScript(`(function(){ var f = document.querySelectorAll('.deck-card iframe'); if (f.length !== ${n}) return false;
+        for (var i = 0; i < f.length; i++) { try { var w = f[i].contentWindow, d = f[i].contentDocument; if (!w.__phantomDeckInit || d.readyState !== 'complete') return false; } catch (e) { return false; } }
+        return true; })()`);
+      if (ok) break;
+      if (Date.now() > deadline) throw new Error('牌組卡片載入逾時');
+      await wait(200);
+    }
+    await wc.executeJavaScript(`Promise.all(Array.prototype.map.call(document.querySelectorAll('.deck-card iframe'), function(f){ return f.contentDocument.fonts ? f.contentDocument.fonts.ready : 1; })).then(function(){ return 1; })`);
+    // 影片／GIF 墊深色底（跟其他匯出一致；光暈、牌堆、閃光在深色底上看得最清楚）
+    await wc.executeJavaScript(`document.documentElement.style.background = ${JSON.stringify(o.format === 'png' ? 'transparent' : 'linear-gradient(#070a12, #04060b)')}; 1`);
+    await wait(1500); // 圖片解碼、開場的第一次繪製（慢動作下）
+
+    fs.mkdirSync(o.outDir, { recursive: true });
+    const name = `牌組${n}張`;
+    const outPath = path.join(o.outDir, `${name}_${o.format === 'png' ? 'deck-still' : 'deck'}_${stamp(new Date())}.${spec.ext}`);
+
+    const startDeck = () => wc.executeJavaScript('window.__deckExport.start()');
+    if (o.format === 'png') {
+      // 靜態圖＝第一張的正面＋待機時的展示效果（不開始翻頁；載入時的開場閃光要先等它結束，約 1.2 秒頁面時間）
+      status('拍照中…', 0.5);
+      await wait(1400 / RATE);
+      const shot = await send('Page.captureScreenshot', { format: 'png', fromSurface: true });
+      const png = Buffer.from(shot.data, 'base64');
+      fs.writeFileSync(outPath, png);
+      return { path: outPath, bytes: png.length, format: 'png', name, png };
+    }
+
+    const encWin = new BrowserWindow({
+      show: false, width: 320, height: 240,
+      webPreferences: { backgroundThrottling: false, contextIsolation: true, preload: path.join(__dirname, 'encoder-preload.js') },
+    });
+    wins.push(encWin);
+    const ready = new Promise((resolve) => { currentEnc = { senderId: encWin.webContents.id, resolveReady: resolve }; });
+    const done = new Promise((resolve, reject) => { currentEnc.resolveDone = resolve; currentEnc.rejectDone = reject; });
+    done.catch(() => {});
+    await encWin.loadURL(pathToFileURL(path.join(__dirname, 'encoder.html')).href);
+    await ready;
+    const bitrate = o.format === 'webm' ? Math.max(3e6, Math.min(12e6, Math.round(outW * outH * fps * 0.11))) : 0;
+    encWin.webContents.send('cx-init', { format: o.format, width: outW, height: outH, fps, bitrate, frames });
+    let encoded = 0;
+    if (o.format === 'gif') currentEnc.onProgress = (k) => { encoded = k; };
+
+    // 錄製：頁面時間 tw＝(真實經過時間)×RATE；每個輸出影格 k（時間 k/fps）取前後兩張截圖裡比較接近的那張
+    const frameMs = 1000 / fps;
+    const shotOpts = frameShot(o.format);
+    await startDeck();
+    const r0 = Date.now();
+    let k = 0;
+    let prev = null; // { tw, buf }
+    while (k < frames) {
+      const before = Date.now();
+      const shot = await send('Page.captureScreenshot', shotOpts);
+      const after = Date.now();
+      const cur = { tw: ((before + after) / 2 - r0) * RATE, buf: Buffer.from(shot.data, 'base64') };
+      while (k < frames && k * frameMs <= cur.tw) {
+        const target = k * frameMs;
+        const pick = prev && Math.abs(prev.tw - target) < Math.abs(cur.tw - target) ? prev : cur;
+        encWin.webContents.send('cx-frame', k, pick.buf);
+        k++;
+      }
+      prev = cur;
+      const recFrac = k / frames;
+      const sec = Math.min(totalMs, cur.tw) / 1000;
+      status(`錄製 ${sec.toFixed(1)}/${(totalMs / 1000).toFixed(1)} 秒${o.format === 'gif' ? `（已編碼 ${encoded} 格）` : ''}`, 0.04 + 0.84 * recFrac);
+    }
+    status('編碼中…', 0.9);
+    if (o.format === 'gif') currentEnc.onProgress = (m) => status(`編碼 ${m}/${frames}`, 0.9 + 0.08 * Math.min(1, m / frames));
+    encWin.webContents.send('cx-finish');
+    const bytes = await Promise.race([done, wait(o.format === 'gif' ? 900000 : 300000).then(() => { throw new Error('編碼逾時'); })]);
+    fs.writeFileSync(outPath, bytes);
+    return { path: outPath, bytes: bytes.length, format: o.format, name };
+  } finally {
+    try { if (cdp) cdp.detach(); } catch (e) { /* 已分離 */ }
+    for (const w of wins) { try { if (!w.isDestroyed()) w.destroy(); } catch (e) { /* 已關閉 */ } }
+    if (stageFile) { try { fs.unlinkSync(stageFile); } catch (e) { /* 已刪除 */ } }
+    currentEnc = null;
+    busy = false;
+  }
+}
+
 // PAGE_SCRIPT／exportCss 一併匯出，給 card-slim 的渲染比對測試共用（同一套「固定姿勢」機制，不用複製一份）。
-module.exports = { exportCard, exportStage, FORMATS, isBusy: () => busy, errText, PAGE_SCRIPT, exportCss };
+module.exports = { exportCard, exportStage, exportDeck, FORMATS, isBusy: () => busy, errText, PAGE_SCRIPT, exportCss };

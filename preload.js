@@ -75,4 +75,7 @@ contextBridge.exposeInMainWorld('cardShell', {
   // 依每個 iframe 的位置換算成 iframe 內座標再 postMessage 給各卡片。
   // callback 只收到純資料 {x, y} 或 null，不會把 IPC event 物件暴露給頁面。
   onCursor: (callback) => ipcRenderer.on('cursor-pos', (_event, point) => callback(point)),
+
+  // 牌組模式：舞台頁每次換卡回報目前是第幾張，main.js 據此決定「匯出分享」匯出哪一張。
+  reportDeck: (idx) => ipcRenderer.send('deck-current', Number(idx)),
 });
