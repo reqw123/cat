@@ -2,3 +2,6 @@ node_modules/
 dist/
 build/
 card-slim/backup/
+__pycache__/
+# 生成卡片前的 cards_meta.json 安全備份（有 git 之後不需要）
+card-maker/genai/cards_meta.before*.json
